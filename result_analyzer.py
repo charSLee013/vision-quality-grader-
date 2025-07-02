@@ -375,7 +375,7 @@ class CostAnalyzer:
         df['quality_range'] = pd.cut(df['score'], bins=bins, labels=labels, right=True)
 
         # 按质量区间分组并聚合
-        distribution = df.groupby('quality_range').agg(
+        distribution = df.groupby('quality_range', observed=False).agg(
             count=('score', 'count'),
             ai_count=('is_ai_generated', lambda x: x.sum()),
             watermark_count=('watermark_present', lambda x: x.sum())
@@ -454,7 +454,7 @@ class ReportGenerator:
             print(f"\n{Fore.RED}🔍 错误类型分布:{Style.RESET_ALL}")
             print(f"  🚫 JSON解析错误: {Fore.RED}{stats['parse_errors']}{Style.RESET_ALL}")
             print(f"  📝 字段缺失错误: {Fore.YELLOW}{stats['field_errors']}{Style.RESET_ALL}")
-            print(f"  🔄 类型错误:     {Fore.ORANGE}{stats['type_errors']}{Style.RESET_ALL}")
+            print(f"  🔄 类型错误:     {Fore.YELLOW}{stats['type_errors']}{Style.RESET_ALL}")
             print(f"  📊 范围错误:     {Fore.MAGENTA}{stats['range_errors']}{Style.RESET_ALL}")
     
     def _print_cost_summary(self):
@@ -467,7 +467,7 @@ class ReportGenerator:
         print(f"  📝 总输出Token:  {Fore.BLUE}{stats['total_completion_tokens']:,}{Style.RESET_ALL}")
         
         if stats['total_reasoning_tokens'] > 0:
-            print(f"  �� 推理Token:    {Fore.MAGENTA}{stats['total_reasoning_tokens']:,}{Style.RESET_ALL}")
+            print(f"  推理Token:    {Fore.MAGENTA}{stats['total_reasoning_tokens']:,}{Style.RESET_ALL}")
         
         print(f"  💵 总成本:       {Fore.RED}¥{stats['total_cost']:.4f}{Style.RESET_ALL}")
         

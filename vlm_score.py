@@ -396,6 +396,13 @@ class ImageQualityAnalyzer:
                     # 解析响应
                     response_data = await response.json()
                     
+                    # Ensure usage data is robust before it's used or saved
+                    usage_data = response_data.get("usage", {})
+                    usage_data.setdefault('prompt_tokens', 0)
+                    usage_data.setdefault('completion_tokens', 0)
+                    usage_data.setdefault('total_tokens', usage_data.get('prompt_tokens', 0) + usage_data.get('completion_tokens', 0))
+                    response_data['usage'] = usage_data
+
                     if "choices" not in response_data or len(response_data["choices"]) == 0:
                         return {
                             "error": "NO_RESPONSE",
