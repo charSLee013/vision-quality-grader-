@@ -211,6 +211,13 @@ The `--dry-run` flag lets you preview the results without copying any files.
 python image_filter_tool.py --source ./images --dest ./filtered --score '>:9.0' --dry-run
 ```
 
+**4. Flatten output directory and rename files with hash:**
+This command filters for high-quality images and copies them to a single flat directory, renaming each file to its SHA256 hash to prevent name collisions.
+
+```bash
+python image_filter_tool.py --source ./images --dest ./high_quality_flat --score '>=:8.0' --flat-output
+```
+
 ### All Arguments
 - `--source`: (Required) The directory containing the source images and JSON files.
 - `--dest`: (Required) The destination directory for the filtered files.
@@ -220,6 +227,7 @@ python image_filter_tool.py --source ./images --dest ./filtered --score '>:9.0' 
 - `--logic`: The logic between filters, `AND` (default) or `OR`.
 - `--workers`: Number of parallel threads to use.
 - `--dry-run`: Simulate the process without copying files.
+- `--flat-output`: Copy all files into a single flat directory, renaming them with their SHA256 hash to avoid name conflicts.
 - `--log-file`: Specify a path for the log file.
 
 ## 📝 Scoring Criteria

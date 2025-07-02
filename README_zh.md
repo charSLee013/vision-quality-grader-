@@ -211,6 +211,13 @@ python image_filter_tool.py --source ./images --dest ./review_needed --score '<:
 python image_filter_tool.py --source ./images --dest ./filtered --score '>:9.0' --dry-run
 ```
 
+**4. 平铺输出目录并用哈希值重命名文件：**
+此命令筛选高质量图片，并将它们复制到一个平铺的目录中，同时将每个文件重命名为其SHA256哈希值，以防止文件名冲突。
+
+```bash
+python image_filter_tool.py --source ./images --dest ./high_quality_flat --score '>=:8.0' --flat-output
+```
+
 ### 全部参数说明
 - `--source`: (必需) 包含源图片和JSON文件的目录。
 - `--dest`: (必需) 用于存放筛选后文件的目标目录。
@@ -220,6 +227,7 @@ python image_filter_tool.py --source ./images --dest ./filtered --score '>:9.0' 
 - `--logic`: 多个筛选条件间的逻辑关系，`AND` (默认) 或 `OR`。
 - `--workers`: 使用的并行工作线程数。
 - `--dry-run`: 模拟运行，不实际复制文件。
+- `--flat-output`: 将所有文件复制到单个平铺目录中，并使用其SHA256哈希值重命名以避免文件名冲突。
 - `--log-file`: 指定日志文件的路径。
 
 ## 📝 评分标准
