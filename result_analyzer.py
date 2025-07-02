@@ -10,6 +10,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 from colorama import init, Fore, Style
 import pandas as pd
+from tqdm import tqdm
 
 # 初始化colorama用于彩色输出
 init(autoreset=True)
@@ -723,19 +724,17 @@ def main():
         report_generator = ReportGenerator(validator, cost_analyzer)
         
         # 验证所有文件
-        print(f"{Fore.YELLOW}🔄 开始验证文件...{Style.RESET_ALL}")
         validation_results = []
         
-        for json_file in json_files:
-            if args.verbose:
-                print(f"  验证: {os.path.basename(json_file)}", end=" ... ")
-            
+        # 使用tqdm创建进度条
+        pbar = tqdm(json_files, desc=f"{Fore.YELLOW}校验文件{Style.RESET_ALL}", ncols=120, leave=True)
+        for json_file in pbar:
             result = validator.validate_single_file(json_file)
             validation_results.append(result)
             
-            if args.verbose:
-                status = f"{Fore.GREEN}✓{Style.RESET_ALL}" if result['is_valid'] else f"{Fore.RED}✗{Style.RESET_ALL}"
-                print(status)
+            # 更新进度条后缀，显示当前文件和状态
+            status = f"{Fore.GREEN}✓{Style.RESET_ALL}" if result['is_valid'] else f"{Fore.RED}✗{Style.RESET_ALL}"
+            pbar.set_postfix_str(f"{os.path.basename(json_file)} {status}")
         
         # 过滤结果 (如果指定)
         if args.filter_valid:
