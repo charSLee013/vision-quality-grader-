@@ -21,3 +21,4 @@ pandas
 filetype
 xmltodict
 colorama
+Pillow

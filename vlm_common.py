@@ -10,6 +10,9 @@ import traceback
 import aiofiles
 from dotenv import load_dotenv
 from colorama import init, Fore, Style
+from PIL import Image
+import io
+from typing import Optional, Dict
 
 # 初始化colorama用于彩色输出
 init(autoreset=True)
@@ -106,7 +109,7 @@ async def image_to_base64(image_path):
         content = await img_file.read()
         return base64.b64encode(content).decode('utf-8')
 
-def get_image_type(image_path):
+def get_image_type(image_path: str) -> str:
     """检测图片类型"""
     img_type = 'jpeg'  # 默认
     try:
@@ -116,10 +119,64 @@ def get_image_type(image_path):
             if img_type == 'jpg':
                 img_type = 'jpeg'
     except Exception:
-        pass
+        return 'jpeg' # 默认
     return img_type
 
-def extract_xml_result(text):
+def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[bytes]:
+    """
+    如果图片尺寸超过最大值，则进行等比压缩。
+
+    Args:
+        image_path: 图片文件路径。
+        max_size: 允许的最大尺寸（宽或高）。
+
+    Returns:
+        如果进行了压缩，则返回压缩后的图片二进制数据 (bytes)；否则返回 None。
+    """
+    try:
+        with Image.open(image_path) as img:
+            # 检查是否包含有效的图像数据
+            try:
+                img.verify()
+                # 重新打开以进行操作
+                img = Image.open(image_path)
+            except Exception:
+                # 对于损坏的或非标准图像，直接跳过压缩
+                return None
+
+            width, height = img.size
+            if width > max_size or height > max_size:
+                print(f"{Fore.YELLOW}图片尺寸 ({width}x{height}) 超出 {max_size}px，尝试压缩...{Style.RESET_ALL}")
+                
+                # 计算等比缩放后的尺寸
+                if width > height:
+                    new_width = max_size
+                    new_height = int(max_size * height / width)
+                else:
+                    new_height = max_size
+                    new_width = int(max_size * width / height)
+                
+                # 使用高质量的LANCZOS采样进行缩放
+                resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # 将压缩后的图片保存到内存
+                byte_arr = io.BytesIO()
+                # 确定原始格式以进行保存
+                img_format = img.format if img.format in ['JPEG', 'PNG', 'WEBP'] else 'JPEG'
+                resized_img.save(byte_arr, format=img_format)
+                
+                return byte_arr.getvalue()
+    except FileNotFoundError:
+        # 文件不存在，无法处理
+        return None
+    except Exception as e:
+        # 捕获所有其他Pillow相关的异常
+        print(f"{Fore.RED}处理图片时发生错误: {e}{Style.RESET_ALL}")
+        return None
+        
+    return None
+
+def extract_xml_result(text: str) -> Dict:
     """从模型输出中提取XML内容（增强鲁棒性）"""
     try:
         # 策略1: 提取<result>标签块（最常见）

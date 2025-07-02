@@ -13,12 +13,14 @@ import aiofiles
 from tqdm.asyncio import tqdm
 import traceback
 import time
+import base64
+import io
 
 # 导入共享工具模块
 from vlm_common import (
     validate_config, find_images, image_to_base64, get_image_type,
     extract_xml_result, CostCalculator, USER_PROMPT,
-    Fore, Style
+    Fore, Style, resize_image_if_needed
 )
 
 class ImageQualityAnalyzer:
@@ -67,63 +69,75 @@ class ImageQualityAnalyzer:
             "temperature": self.temperature
         }
 
+    async def _send_request(self, session, payload):
+        """发送API请求并返回响应"""
+        return await session.post(
+            self.api_endpoint,
+            headers=self.headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=self.timeout)
+        )
+
     async def analyze_image(self, session, image_path):
         """通过VLM API异步分析单张图片"""
         async with self.semaphore:  # 控制并发数量
             try:
                 # 异步读取和编码图片
                 base64_image = await image_to_base64(image_path)
-                
-                # 检测图片类型
                 img_type = get_image_type(image_path)
-                
-                # 构建请求负载
                 payload = self._build_payload(base64_image, img_type)
                 
-                # 发送异步请求
-                async with session.post(
-                    self.api_endpoint,
-                    headers=self.headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout)
-                ) as response:
-                    
-                    if response.status != 200:
-                        error_text = await response.text()
-                        error_msg = f"API错误 ({response.status})"
+                # 首次发送异步请求
+                response = await self._send_request(session, payload)
+                
+                # 如果遇到400错误，尝试压缩图片后重试
+                if response.status == 400:
+                    compressed_data = resize_image_if_needed(image_path)
+                    if compressed_data:
+                        base64_image = base64.b64encode(compressed_data).decode('utf-8')
+                        # 图片类型可能因压缩而改变，这里简单处理
+                        img_type = get_image_type(io.BytesIO(compressed_data))
+                        payload = self._build_payload(base64_image, img_type)
                         
-                        try:
-                            error_data = await response.json()
-                            error_msg += f": {error_data.get('message', '未知错误')}"
-                        except:
-                            error_msg += f": {error_text[:200]}"
-                        
-                        return {
-                            "error": "API_ERROR",
-                            "message": error_msg,
-                            "status_code": response.status
-                        }
+                        print(f"{Fore.CYAN}正在使用压缩后的图片重试...{Style.RESET_ALL}")
+                        response = await self._send_request(session, payload) # 重试
+
+                if response.status != 200:
+                    error_text = await response.text()
+                    error_msg = f"API错误 ({response.status})"
                     
-                    # 解析响应
-                    response_data = await response.json()
+                    try:
+                        error_data = await response.json()
+                        error_msg += f": {error_data.get('message', '未知错误')}"
+                    except:
+                        error_msg += f": {error_text[:200]}"
                     
-                    if "choices" not in response_data or len(response_data["choices"]) == 0:
-                        return {
-                            "error": "NO_RESPONSE",
-                            "message": "API返回了空响应"
-                        }
-                    
-                    content = response_data["choices"][0]["message"]["content"]
-                    
-                    # 提取XML结果
-                    result = extract_xml_result(content)
-                    
-                    # 添加元数据
-                    if isinstance(result, dict) and "error" not in result:
-                        result["api_usage"] = response_data.get("usage", {})
-                        result["api_provider"] = "volces"
-                    
-                    return result
+                    return {
+                        "error": "API_ERROR",
+                        "message": error_msg,
+                        "status_code": response.status
+                    }
+                
+                # 解析响应
+                response_data = await response.json()
+                
+                if "choices" not in response_data or len(response_data["choices"]) == 0:
+                    return {
+                        "error": "NO_RESPONSE",
+                        "message": "API返回了空响应"
+                    }
+                
+                content = response_data["choices"][0]["message"]["content"]
+                
+                # 提取XML结果
+                result = extract_xml_result(content)
+                
+                # 添加元数据
+                if isinstance(result, dict) and "error" not in result:
+                    result["api_usage"] = response_data.get("usage", {})
+                    result["api_provider"] = "volces"
+                
+                return result
                     
             except asyncio.TimeoutError:
                 return {
