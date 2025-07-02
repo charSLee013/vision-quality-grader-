@@ -147,6 +147,38 @@ python -m unittest discover -s . -p "test_*.py" -v
 - ✅ XML解析测试
 - ✅ 成本计算测试
 
+## 📊 结果分析
+
+分析和验证VLM评分工具生成的JSON结果，提供全面的成本统计分析。
+
+### 主要功能
+- **JSON格式验证**: 检查结果文件结构和数据完整性
+- **成本分析**: 计算API调用总成本和token使用统计
+- **质量洞察**: 生成评分和检测结果的分布分析
+- **多格式报告**: 支持控制台、CSV、HTML等多种报告格式
+
+### 安装依赖
+```bash
+pip install pandas colorama
+```
+
+### 基本用法
+```bash
+# 基本分析（控制台输出）
+python result_analyzer.py /path/to/results
+
+# 导出详细CSV报告
+python result_analyzer.py /path/to/results --export-csv analysis.csv
+
+# 生成所有格式报告
+python result_analyzer.py /path/to/results --output-format all --export-path ./reports/
+```
+
+### 报告内容
+- 📋 文件验证统计（成功率、错误类型）
+- 💰 成本分析（总成本、平均每张成本、token使用量）
+- 📈 质量分布（评分范围、AI检测、水印统计）
+
 ## 📝 评分标准
 
 系统基于以下维度对图像进行专业质量评估:

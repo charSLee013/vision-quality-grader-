@@ -30,3 +30,7 @@ build/
 # Windows
 Thumbs.db
 ehthumbs.db
+
+# results
+test_report.html
+test_results.csv
