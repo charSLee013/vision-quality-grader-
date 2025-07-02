@@ -179,6 +179,49 @@ python result_analyzer.py /path/to/results --output-format all --export-path ./r
 - 💰 Cost analysis (total cost, average per image, token usage)
 - 📈 Quality distribution (score ranges, AI detection, watermark statistics)
 
+## 🔬 Result Filtering
+
+After analyzing the results, you can use the `image_filter_tool.py` script to filter and copy images and their corresponding `.json` files to a new directory based on specific criteria.
+
+### Basic Usage
+```bash
+python image_filter_tool.py --source <source_directory> --dest <destination_directory> [FILTERS]
+```
+
+### Examples
+
+**1. Filter for high-quality, non-AI, watermark-free images:**
+This command copies images with a score of 8.0 or higher, which are not AI-generated and have no watermarks.
+
+```bash
+python image_filter_tool.py --source ./images --dest ./high_quality_images --score '>=:8.0' --is-ai false --has-watermark false
+```
+
+**2. Filter for low-quality images OR AI-generated images:**
+This uses `OR` logic to find images that have a score below 5 or are identified as AI-generated.
+
+```bash
+python image_filter_tool.py --source ./images --dest ./review_needed --score '<:5' --is-ai true --logic OR
+```
+
+**3. Perform a dry run to see what will be copied:**
+The `--dry-run` flag lets you preview the results without copying any files.
+
+```bash
+python image_filter_tool.py --source ./images --dest ./filtered --score '>:9.0' --dry-run
+```
+
+### All Arguments
+- `--source`: (Required) The directory containing the source images and JSON files.
+- `--dest`: (Required) The destination directory for the filtered files.
+- `--score`: Filter by score. Format: `'OP:VALUE'` (e.g., `'>:8.5'`) or `'between:MIN:MAX'`.
+- `--is-ai`: Filter by AI-generated status (`true` or `false`).
+- `--has-watermark`: Filter by watermark presence (`true` or `false`).
+- `--logic`: The logic between filters, `AND` (default) or `OR`.
+- `--workers`: Number of parallel threads to use.
+- `--dry-run`: Simulate the process without copying files.
+- `--log-file`: Specify a path for the log file.
+
 ## 📝 Scoring Criteria
 
 The system evaluates image quality based on the following professional dimensions:
