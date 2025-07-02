@@ -10,7 +10,6 @@ from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 from colorama import init, Fore, Style
 import pandas as pd
-from tqdm import tqdm
 
 # 初始化colorama用于彩色输出
 init(autoreset=True)
@@ -356,6 +355,52 @@ class CostAnalyzer:
             }
         }
     
+    def get_quality_distribution_data(self) -> List[Dict[str, Any]]:
+        """
+        计算详细的质量分布数据，用于生成表格
+        
+        Returns:
+            一个字典列表，每个字典代表表格的一行
+        """
+        if not self.detailed_costs:
+            return []
+
+        df = pd.DataFrame(self.detailed_costs)
+        total_images = len(df)
+
+        # 定义分数区间和标签
+        bins = [-0.1, 2.9, 4.9, 6.9, 8.9, 10.0]
+        labels = ["[0.0-2.9] 低质", "[3.0-4.9] 需改进", "[5.0-6.9] 中等", "[7.0-8.9] 优质", "[9.0-10.0] 专业级"]
+        
+        df['quality_range'] = pd.cut(df['score'], bins=bins, labels=labels, right=True)
+
+        # 按质量区间分组并聚合
+        distribution = df.groupby('quality_range').agg(
+            count=('score', 'count'),
+            ai_count=('is_ai_generated', lambda x: x.sum()),
+            watermark_count=('watermark_present', lambda x: x.sum())
+        ).reset_index()
+
+        # 计算衍生指标
+        distribution['percentage'] = (distribution['count'] / total_images) * 100
+        distribution['ai_rate'] = (distribution['ai_count'] / distribution['count']).fillna(0) * 100
+        distribution['watermark_rate'] = (distribution['watermark_count'] / distribution['count']).fillna(0) * 100
+        
+        # 确保所有区间都存在，即使数量为0
+        all_ranges = pd.DataFrame({'quality_range': labels})
+        distribution = pd.merge(all_ranges, distribution, on='quality_range', how='left').fillna(0)
+
+        # 转换数据类型为整数
+        int_columns = ['count', 'ai_count', 'watermark_count']
+        for col in int_columns:
+            distribution[col] = distribution[col].astype(int)
+
+        # 按照标签顺序排序
+        distribution['quality_range'] = pd.Categorical(distribution['quality_range'], categories=labels, ordered=True)
+        distribution = distribution.sort_values('quality_range')
+
+        return distribution.to_dict('records')
+
     def _calculate_std(self, values: List[float]) -> float:
         """计算标准差"""
         if len(values) < 2:
@@ -409,7 +454,7 @@ class ReportGenerator:
             print(f"\n{Fore.RED}🔍 错误类型分布:{Style.RESET_ALL}")
             print(f"  🚫 JSON解析错误: {Fore.RED}{stats['parse_errors']}{Style.RESET_ALL}")
             print(f"  📝 字段缺失错误: {Fore.YELLOW}{stats['field_errors']}{Style.RESET_ALL}")
-            print(f"  🔄 类型错误:     {Fore.YELLOW}{stats['type_errors']}{Style.RESET_ALL}")
+            print(f"  🔄 类型错误:     {Fore.ORANGE}{stats['type_errors']}{Style.RESET_ALL}")
             print(f"  📊 范围错误:     {Fore.MAGENTA}{stats['range_errors']}{Style.RESET_ALL}")
     
     def _print_cost_summary(self):
@@ -422,7 +467,7 @@ class ReportGenerator:
         print(f"  📝 总输出Token:  {Fore.BLUE}{stats['total_completion_tokens']:,}{Style.RESET_ALL}")
         
         if stats['total_reasoning_tokens'] > 0:
-            print(f"  🧠 推理Token:    {Fore.MAGENTA}{stats['total_reasoning_tokens']:,}{Style.RESET_ALL}")
+            print(f"  �� 推理Token:    {Fore.MAGENTA}{stats['total_reasoning_tokens']:,}{Style.RESET_ALL}")
         
         print(f"  💵 总成本:       {Fore.RED}¥{stats['total_cost']:.4f}{Style.RESET_ALL}")
         
@@ -445,23 +490,46 @@ class ReportGenerator:
         print(f"    最高: {Fore.RED}¥{cost_stats['max_cost']:.4f}{Style.RESET_ALL}")
         print(f"    中位: {Fore.CYAN}¥{cost_stats['median_cost']:.4f}{Style.RESET_ALL}")
         
-        # 质量分布
-        score_stats = distribution_stats['score_stats']
-        print(f"  ⭐ 质量分布:")
-        print(f"    最低分: {Fore.RED}{score_stats['min_score']:.1f}{Style.RESET_ALL}")
-        print(f"    最高分: {Fore.GREEN}{score_stats['max_score']:.1f}{Style.RESET_ALL}")
-        print(f"    平均分: {Fore.CYAN}{score_stats['average_score']:.1f}{Style.RESET_ALL}")
+        # 打印新的质量分布详情表
+        self._print_quality_distribution_table()
         
         # AI生成统计
         ai_stats = distribution_stats['ai_detection_stats']
-        print(f"  🤖 AI生成检测:")
-        print(f"    AI生成: {Fore.YELLOW}{ai_stats['ai_generated_count']}{Style.RESET_ALL} ({ai_stats['ai_generated_ratio']:.1f}%)")
+        print(f"  🤖 AI生成检测 (全局):")
+        print(f"    AI生成: {Fore.YELLOW}{ai_stats['ai_generated_count']}{Style.RESET_ALL} / {self.cost_analyzer.cost_stats['successful_analyses']} ({ai_stats['ai_generated_ratio']:.1f}%)")
         
         # 水印统计
         watermark_stats = distribution_stats['watermark_stats']
-        print(f"  💧 水印检测:")
-        print(f"    含水印: {Fore.BLUE}{watermark_stats['watermark_count']}{Style.RESET_ALL} ({watermark_stats['watermark_ratio']:.1f}%)")
+        print(f"  💧 水印检测 (全局):")
+        print(f"    含水印: {Fore.BLUE}{watermark_stats['watermark_count']}{Style.RESET_ALL} / {self.cost_analyzer.cost_stats['successful_analyses']} ({watermark_stats['watermark_ratio']:.1f}%)")
     
+    def _print_quality_distribution_table(self):
+        """打印格式化的质量分布表格"""
+        table_data = self.cost_analyzer.get_quality_distribution_data()
+        
+        if not table_data:
+            return
+            
+        print(f"\n  ⭐ {Fore.CYAN}质量分布详情:{Style.RESET_ALL}")
+        
+        # 表头
+        header = f"  {'分数区间':<18} | {'图片数量':>8} | {'占比':>7} | {'AI生成':>6} | {'区间AI率':>9} | {'含水印':>7} | {'区间水印率':>11} "
+        print(f"  {Fore.WHITE}{Style.BRIGHT}{header}{Style.RESET_ALL}")
+        print(f"  {'-'*len(header)}")
+
+        # 表内容
+        for row in table_data:
+            line = (
+                f"  {row['quality_range']:<18} | "
+                f"{row['count']:>8,} | "
+                f"{row['percentage']:>6.1f}% | "
+                f"{row['ai_count']:>6,} | "
+                f"{row['ai_rate']:>8.1f}% | "
+                f"{row['watermark_count']:>7,} | "
+                f"{row['watermark_rate']:>10.1f}% "
+            )
+            print(line)
+
     def _print_detailed_errors(self):
         """打印详细错误信息"""
         print(f"\n{Fore.RED}🔍 详细错误信息:{Style.RESET_ALL}")
@@ -475,7 +543,7 @@ class ReportGenerator:
                 print(f"  {Fore.RED}❌{Style.RESET_ALL} {error}")
             
             for warning in error_info['warnings']:
-                print(f"  {Fore.YELLOW}⚠️{Style.RESET_ALL} {warning}")
+                print(f"  {Fore.ORANGE}⚠️{Style.RESET_ALL} {warning}")
         
         if len(self.validator.detailed_errors) > 10:
             remaining = len(self.validator.detailed_errors) - 10
@@ -577,68 +645,23 @@ class ReportGenerator:
         return html
 
 
-def _has_corresponding_image(json_file_path: str) -> bool:
-    """
-    检查JSON文件是否有对应的图像文件
-    
-    Args:
-        json_file_path: JSON文件的完整路径
-        
-    Returns:
-        True如果存在对应的图像文件，否则False
-    """
-    # 支持的图像文件扩展名
-    IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
-    
-    # 检查JSON文件是否以.json结尾
-    if not json_file_path.endswith('.json'):
-        return False
-    
-    # 方式1：检查 image.jpg.json -> image.jpg 的模式
-    potential_image_path = json_file_path[:-5]  # 移除'.json'
-    if os.path.exists(potential_image_path):
-        _, ext = os.path.splitext(potential_image_path)
-        if ext.lower() in IMAGE_EXTENSIONS:
-            return True
-    
-    # 方式2：检查 image.json -> image.jpg 的模式（同名不同扩展名）
-    json_dir = os.path.dirname(json_file_path)
-    json_basename = os.path.basename(json_file_path)
-    json_name_without_ext = os.path.splitext(json_basename)[0]  # 去掉.json
-    
-    # 在同一目录下查找同名的图像文件
-    for ext in IMAGE_EXTENSIONS:
-        potential_image_path = os.path.join(json_dir, json_name_without_ext + ext)
-        if os.path.exists(potential_image_path):
-            return True
-    
-    return False
-
-
 def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -> List[str]:
     """
-    递归查找有对应图像文件的结果JSON文件
+    递归查找结果JSON文件
     
     Args:
         root_dir: 搜索根目录
         extensions: 文件扩展名元组
         
     Returns:
-        找到的有图像配对的JSON文件路径列表
+        找到的JSON文件路径列表
     """
     all_files = []
     for ext in extensions:
         pattern = os.path.join(root_dir, '**', f'*{ext}')
-        found_files = glob.glob(pattern, recursive=True)
-        all_files.extend(found_files)
+        all_files.extend(glob.glob(pattern, recursive=True))
     
-    # 过滤出有对应图像文件的JSON文件
-    filtered_files = []
-    for json_file in all_files:
-        if _has_corresponding_image(json_file):
-            filtered_files.append(json_file)
-    
-    return sorted(list(set(filtered_files)))  # 去重并排序
+    return sorted(list(set(all_files)))  # 去重并排序 
 
 def main():
     """主函数 - 命令行入口和主流程控制"""
@@ -724,17 +747,19 @@ def main():
         report_generator = ReportGenerator(validator, cost_analyzer)
         
         # 验证所有文件
+        print(f"{Fore.YELLOW}🔄 开始验证文件...{Style.RESET_ALL}")
         validation_results = []
         
-        # 使用tqdm创建进度条
-        pbar = tqdm(json_files, desc=f"{Fore.YELLOW}校验文件{Style.RESET_ALL}", ncols=120, leave=True)
-        for json_file in pbar:
+        for json_file in json_files:
+            if args.verbose:
+                print(f"  验证: {os.path.basename(json_file)}", end=" ... ")
+            
             result = validator.validate_single_file(json_file)
             validation_results.append(result)
             
-            # 更新进度条后缀，显示当前文件和状态
-            status = f"{Fore.GREEN}✓{Style.RESET_ALL}" if result['is_valid'] else f"{Fore.RED}✗{Style.RESET_ALL}"
-            pbar.set_postfix_str(f"{os.path.basename(json_file)} {status}")
+            if args.verbose:
+                status = f"{Fore.GREEN}✓{Style.RESET_ALL}" if result['is_valid'] else f"{Fore.RED}✗{Style.RESET_ALL}"
+                print(status)
         
         # 过滤结果 (如果指定)
         if args.filter_valid:
