@@ -1,0 +1,39 @@
+# VLM图像质量评分工具依赖包
+# 基础依赖
+aiohttp>=3.8.0,<4.0.0       # 异步HTTP客户端，用于API调用
+aiofiles>=23.0.0,<24.0.0    # 异步文件操作
+asyncio-throttle>=1.0.2     # 异步请求限流控制
+
+# 进度显示和用户界面
+tqdm>=4.64.0,<5.0.0         # 进度条显示
+
+# 数据处理
+Pillow>=9.0.0,<11.0.0       # 图像处理库，用于图片格式验证和处理
+
+# 开发和测试依赖
+pytest>=7.0.0,<8.0.0        # 测试框架
+pytest-asyncio>=0.21.0      # 异步测试支持
+unittest-xml-reporting>=3.2.0  # XML格式测试报告
+
+# 可选依赖 - 环境变量管理
+python-dotenv>=1.0.0,<2.0.0 # .env文件支持
+
+# Python内置模块(无需安装)
+# - os: 操作系统接口
+# - sys: 系统相关参数和函数
+# - json: JSON数据处理
+# - argparse: 命令行参数解析
+# - asyncio: 异步编程
+# - base64: Base64编码解码
+# - sqlite3: SQLite数据库
+# - tempfile: 临时文件和目录
+# - pathlib: 面向对象的文件系统路径
+# - threading: 线程支持
+# - time: 时间相关函数
+# - datetime: 日期和时间处理
+# - signal: Unix信号处理
+# - re: 正则表达式
+# - xml.etree.ElementTree: XML处理
+# - urllib.parse: URL解析
+# - logging: 日志记录
+# - traceback: 异常追踪 

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+dist/
+build/
+*.egg
+*.whl
+.env
+
+# Media files and generated outputs
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
+*.json
+
+# macOS 
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
