@@ -14,6 +14,9 @@ import pandas as pd
 # 初始化colorama用于彩色输出
 init(autoreset=True)
 
+# 图片文件扩展名常量
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.tif')
+
 class JsonValidator:
     """JSON结果文件验证器"""
     
@@ -645,23 +648,75 @@ class ReportGenerator:
         return html
 
 
-def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -> List[str]:
+def find_image_files(root_dir: str, image_extensions: Tuple[str, ...] = IMAGE_EXTENSIONS) -> List[str]:
     """
-    递归查找结果JSON文件
+    递归查找所有图片文件
     
     Args:
         root_dir: 搜索根目录
-        extensions: 文件扩展名元组
+        image_extensions: 图片文件扩展名元组
         
     Returns:
-        找到的JSON文件路径列表
+        找到的图片文件路径列表
     """
-    all_files = []
-    for ext in extensions:
+    all_images = []
+    for ext in image_extensions:
+        # 搜索小写扩展名
         pattern = os.path.join(root_dir, '**', f'*{ext}')
-        all_files.extend(glob.glob(pattern, recursive=True))
+        all_images.extend(glob.glob(pattern, recursive=True))
+        # 搜索大写扩展名
+        pattern = os.path.join(root_dir, '**', f'*{ext.upper()}')
+        all_images.extend(glob.glob(pattern, recursive=True))
     
-    return sorted(list(set(all_files)))  # 去重并排序 
+    return sorted(list(set(all_images)))  # 去重并排序
+
+
+def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -> List[str]:
+    """
+    递归查找结果JSON文件，只返回对应图片文件的JSON结果
+    
+    Args:
+        root_dir: 搜索根目录
+        extensions: 文件扩展名元组（保持向后兼容性，但主要用于JSON）
+        
+    Returns:
+        找到的对应图片文件的JSON文件路径列表
+    """
+    # 首先找到所有图片文件
+    image_files = find_image_files(root_dir)
+    
+    valid_json_files = []
+    total_images = len(image_files)
+    found_json_count = 0
+    
+    print(f"{Fore.CYAN}🖼️  发现图片文件: {total_images:,} 个{Style.RESET_ALL}")
+    
+    # 对每个图片文件，检查是否存在对应的JSON结果文件
+    for image_path in image_files:
+        # 构造对应的JSON文件路径
+        json_path = os.path.splitext(image_path)[0] + '.json'
+        
+        # 检查JSON文件是否存在
+        if os.path.exists(json_path):
+            valid_json_files.append(json_path)
+            found_json_count += 1
+    
+    print(f"{Fore.GREEN}📊 找到对应的JSON结果文件: {found_json_count:,} 个{Style.RESET_ALL}")
+    
+    if total_images > 0:
+        coverage_rate = (found_json_count / total_images) * 100
+        print(f"{Fore.BLUE}📈 处理覆盖率: {coverage_rate:.1f}%{Style.RESET_ALL}")
+    
+    # 如果没有找到任何对应的JSON文件，回退到原始方法（向后兼容）
+    if not valid_json_files:
+        print(f"{Fore.YELLOW}⚠️ 未找到图片对应的JSON文件，回退到搜索所有JSON文件{Style.RESET_ALL}")
+        all_files = []
+        for ext in extensions:
+            pattern = os.path.join(root_dir, '**', f'*{ext}')
+            all_files.extend(glob.glob(pattern, recursive=True))
+        return sorted(list(set(all_files)))
+    
+    return sorted(valid_json_files)
 
 def main():
     """主函数 - 命令行入口和主流程控制"""
