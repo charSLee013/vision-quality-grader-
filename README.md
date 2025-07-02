@@ -1,81 +1,83 @@
-# VLM图像质量评分工具
+[简体中文](README_zh.md)
 
-一个基于火山引擎视觉大模型(VLM)的智能图像质量评分工具，提供专业的图片质量分析和评估服务。
+# Vision Quality Grader
 
-## ✨ 主要特性
+An intelligent image quality assessment tool based on the Volcano Engine Vision Large Model (VLM), providing professional analysis and evaluation services for image quality.
 
-- **智能评分**: 基于先进的视觉大模型，提供10分制专业评分
-- **多维度分析**: 涵盖技术质量、构图美学、内容质量等多个维度
-- **AI检测**: 自动识别AI生成图片和水印
-- **批量处理**: 支持目录递归扫描，自动处理大量图片
-- **异步高效**: 异步并发处理，大幅提升处理速度
-- **结果保存**: 自动生成详细的JSON格式分析报告
-- **成本追踪**: 实时监控API调用成本和token使用情况
-- **容错机制**: 智能重试和错误处理，确保处理稳定性
-- **优雅中断**: 支持`Ctrl+C`优雅停止，保存处理进度
+## ✨ Key Features
 
-## 📦 项目结构
+- **Intelligent Scoring**: Provides a professional 10-point scoring system based on advanced VLM.
+- **Multi-dimensional Analysis**: Covers technical quality, composition aesthetics, and content quality.
+- **AI & Watermark Detection**: Automatically identifies AI-generated content and watermarks.
+- **Batch Processing**: Supports recursive directory scanning for automated processing of large image sets.
+- **High-Efficiency Async**: Utilizes asynchronous concurrent processing to significantly boost performance.
+- **Result Persistence**: Automatically generates detailed analysis reports in JSON format.
+- **Cost Tracking**: Monitors API call costs and token usage in real-time.
+- **Fault Tolerance**: Implements intelligent retries and error handling for stable processing.
+- **Graceful Shutdown**: Supports `Ctrl+C` for elegant interruption, saving progress.
+
+## 📦 Project Structure
 
 ```
-vlm_score/
-├── vlm_common.py           # 共享工具模块
-├── vlm_score_online.py     # 在线推理脚本
-├── test_vlm_common.py      # 公共模块测试
-├── README.md              # 项目说明文档
-└── requirements.txt       # 依赖包列表
+vision-quality-grader/
+├── vlm_common.py           # Shared utility module
+├── vlm_score_online.py     # Online inference script
+├── test_vlm_common.py      # Test script for common module
+├── README.md              # Project documentation
+└── requirements.txt       # Dependency list
 ```
 
-## 🛠 安装配置
+## 🛠 Installation & Configuration
 
-### 1. 环境要求
+### 1. Prerequisites
 - Python 3.7+
-- 支持的操作系统: Windows、macOS、Linux
+- Supported OS: Windows, macOS, Linux
 
-### 2. 安装依赖
+### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 环境变量配置
-创建`.env`文件或设置系统环境变量:
+### 3. Environment Variables
+Create a `.env` file or set system environment variables:
 
 ```bash
-# 必需配置
+# Required
 export VLM_API_BASE="https://ark.cn-beijing.volces.com"
 export VLM_API_KEY="your_api_key_here"
 export VLM_MODEL_NAME="doubao-vision-pro-32k"
 
-# 可选配置
-export VLM_MAX_CONCURRENT="5"  # 并发请求数，默认5
+# Optional
+export VLM_MAX_CONCURRENT="5"  # Max concurrent requests, default is 5
 ```
 
-### 4. 验证安装
+### 4. Verify Installation
 ```bash
 python vlm_score_online.py --help
 ```
 
-## 🎯 使用指南
+## 🎯 Usage Guide
 
-### 在线推理模式
+### Online Inference Mode
 
-适用于图片的实时处理，支持高并发异步处理。
+Ideal for real-time processing of images with high-concurrency support.
 
 ```bash
-# 基本用法
+# Basic usage
 python vlm_score_online.py --root-dir ./images
 
-# 指定并发数
+# Specify concurrency limit
 python vlm_score_online.py --root-dir ./images --max-concurrent 10
 
-# 查看帮助
+# Show help
 python vlm_score_online.py --help
 ```
 
-**输出**: 在每个图片同级目录生成对应的`.json`结果文件。
+**Output**: A corresponding `.json` file is generated in the same directory as each image.
 
-## 📊 输出格式
+## 📊 Output Format
 
-### 单张图片结果示例
+### Single Image Result Example
 ```json
 {
     "image_path": "/path/to/image.jpg",
@@ -85,7 +87,7 @@ python vlm_score_online.py --help
         "watermark_present": "false", 
         "watermark_location": "none",
         "score": "8.5",
-        "feedback": "图片清晰度较好，色彩自然，构图合理。细节丰富，整体质量优秀。"
+        "feedback": "The image has good clarity, natural colors, and a reasonable composition. Rich in detail and of excellent overall quality."
     },
     "cost_info": {
         "prompt_tokens": 1024,
@@ -97,130 +99,127 @@ python vlm_score_online.py --help
 }
 ```
 
-## 🔧 API参考
+## 🔧 API Reference
 
-### vlm_common模块
+### `vlm_common` Module
 
-#### 配置验证
+#### Configuration Validation
 ```python
 from vlm_common import validate_config
 config = validate_config()
 ```
 
-#### 图片处理
+#### Image Processing
 ```python
 from vlm_common import find_images, image_to_base64
 images = find_images("/path/to/images")
 base64_data = await image_to_base64("/path/to/image.jpg")
 ```
 
-#### XML结果解析
+#### XML Result Parsing
 ```python
 from vlm_common import extract_xml_result
 result = extract_xml_result(api_response_text)
 ```
 
-#### 成本计算
+#### Cost Calculation
 ```python
 from vlm_common import CostCalculator
 calculator = CostCalculator()
 cost_info = calculator.calculate_cost(prompt_tokens=1000, completion_tokens=200)
 ```
 
-## 🧪 测试
+## 🧪 Testing
 
-### 运行测试
+### Running Tests
 ```bash
-# 测试公共模块
+# Test the common module
 python test_vlm_common.py
 
-# 或者使用unittest发现
+# Or use unittest discovery
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
-### 测试覆盖
-- ✅ 配置验证测试
-- ✅ 图片文件发现测试
-- ✅ Base64转换测试
-- ✅ XML解析测试
-- ✅ 成本计算测试
+### Test Coverage
+- ✅ Configuration Validation
+- ✅ Image File Discovery
+- ✅ Base64 Conversion
+- ✅ XML Parsing
+- ✅ Cost Calculation
 
-## 📝 评分标准
+## 📝 Scoring Criteria
 
-系统基于以下维度对图像进行专业质量评估:
+The system evaluates image quality based on the following professional dimensions:
 
-### 评分维度
-1. **技术质量** (40%)
-   - 清晰度和锐度
-   - 曝光和对比度
-   - 色彩还原准确性
-   - 噪点和失真控制
+### Scoring Dimensions
+1.  **Technical Quality** (40%)
+    -   Clarity and sharpness
+    -   Exposure and contrast
+    -   Color accuracy
+    -   Noise and distortion control
 
-2. **构图美学** (30%)
-   - 构图平衡和比例
-   - 视觉焦点和引导
-   - 创意性和独特性
+2.  **Compositional Aesthetics** (30%)
+    -   Balance and proportion
+    -   Visual focus and guidance
+    -   Creativity and uniqueness
 
-3. **内容质量** (20%)
-   - 主题明确性
-   - 内容丰富度
-   - 表达效果
+3.  **Content Quality** (20%)
+    -   Subject clarity
+    -   Content richness
+    -   Expressive effectiveness
 
-4. **AI生成检测** (10%)
-   - AI痕迹识别
-   - 真实性判断
+4.  **AI Generation Detection** (10%)
+    -   AI artifact identification
+    -   Authenticity assessment
 
-### 评分等级
-- **9-10分**: 专业级质量，技术和美学俱佳
-- **7-8分**: 高质量，适合商业使用
-- **5-6分**: 中等质量，基本可用
-- **3-4分**: 较低质量，存在明显缺陷
-- **1-2分**: 低质量，不建议使用
+### Scoring Tiers
+- **9-10**: Professional-grade quality, excellent in both technique and aesthetics.
+- **7-8**: High quality, suitable for commercial use.
+- **5-6**: Medium quality, generally usable.
+- **3-4**: Lower quality, with noticeable flaws.
+- **1-2**: Low quality, not recommended for use.
 
-## ⚠️ 注意事项
+## ⚠️ Important Notes
 
-### 数据安全
-- 图片仅用于质量评估，不会存储或用于其他用途
-- 建议定期清理生成的结果文件
-- 敏感图片请谨慎使用
+### Data Security
+- Images are used only for quality assessment and are not stored or used for other purposes.
+- It is recommended to periodically clean up the generated result files.
+- Use caution with sensitive images.
 
-### 性能优化
-- 合理设置并发数避免API限流
-- 大量图片处理时建议分批进行
+### Performance Optimization
+- Set a reasonable concurrency limit to avoid API rate limiting.
+- It is advisable to process large numbers of images in batches.
 
-### 错误处理
-- 网络异常会自动重试
-- 所有错误信息会详细记录
+### Error Handling
+- Network exceptions will trigger automatic retries.
+- All errors are logged in detail.
 
-## 🤝 故障排除
+## 🤝 Troubleshooting
 
-### 常见问题
+### Common Issues
 
-**Q: 提示"API密钥无效"**
-A: 检查环境变量`VLM_API_KEY`是否正确设置，确保API密钥有效。
+**Q: "Invalid API Key" error**
+A: Check if the `VLM_API_KEY` environment variable is set correctly and ensure the key is valid.
 
-**Q: 某些图片处理失败**
-A: 检查图片格式是否支持(jpg/jpeg/png/gif/bmp)，以及文件是否损坏。
+**Q: Some images fail to process**
+A: Verify that the image format is supported (jpg/jpeg/png/gif/bmp) and that the file is not corrupted.
 
-### 调试模式
-设置环境变量启用详细日志:
+### Debug Mode
+Enable detailed logging by setting an environment variable:
 ```bash
 export VLM_DEBUG=1
 python vlm_score_online.py --root-dir ./images
 ```
 
-## 📄 许可证
+## 📄 License
 
-本项目采用MIT许可证。详情请参见LICENSE文件。
+This project is licensed under the MIT License. See the LICENSE file for details.
 
-## 🆘 技术支持
+## 🆘 Support
 
-如遇到问题，请提供以下信息：
-1. Python版本和操作系统
-2. 错误信息和堆栈跟踪
-3. 输入数据示例
-4. 期望的输出结果
+If you encounter issues, please provide the following information:
+1.  Python version and operating system
+2.  Error message and stack trace
+3.  Sample input data
+4.  Expected output
 
----
-
-**开发团队** | **更新时间**: 2024-12-03 | **版本**: v1.0.0 
