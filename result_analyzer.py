@@ -576,23 +576,68 @@ class ReportGenerator:
         return html
 
 
+def _has_corresponding_image(json_file_path: str) -> bool:
+    """
+    检查JSON文件是否有对应的图像文件
+    
+    Args:
+        json_file_path: JSON文件的完整路径
+        
+    Returns:
+        True如果存在对应的图像文件，否则False
+    """
+    # 支持的图像文件扩展名
+    IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+    
+    # 检查JSON文件是否以.json结尾
+    if not json_file_path.endswith('.json'):
+        return False
+    
+    # 方式1：检查 image.jpg.json -> image.jpg 的模式
+    potential_image_path = json_file_path[:-5]  # 移除'.json'
+    if os.path.exists(potential_image_path):
+        _, ext = os.path.splitext(potential_image_path)
+        if ext.lower() in IMAGE_EXTENSIONS:
+            return True
+    
+    # 方式2：检查 image.json -> image.jpg 的模式（同名不同扩展名）
+    json_dir = os.path.dirname(json_file_path)
+    json_basename = os.path.basename(json_file_path)
+    json_name_without_ext = os.path.splitext(json_basename)[0]  # 去掉.json
+    
+    # 在同一目录下查找同名的图像文件
+    for ext in IMAGE_EXTENSIONS:
+        potential_image_path = os.path.join(json_dir, json_name_without_ext + ext)
+        if os.path.exists(potential_image_path):
+            return True
+    
+    return False
+
+
 def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -> List[str]:
     """
-    递归查找结果JSON文件
+    递归查找有对应图像文件的结果JSON文件
     
     Args:
         root_dir: 搜索根目录
         extensions: 文件扩展名元组
         
     Returns:
-        找到的JSON文件路径列表
+        找到的有图像配对的JSON文件路径列表
     """
     all_files = []
     for ext in extensions:
         pattern = os.path.join(root_dir, '**', f'*{ext}')
-        all_files.extend(glob.glob(pattern, recursive=True))
+        found_files = glob.glob(pattern, recursive=True)
+        all_files.extend(found_files)
     
-    return sorted(list(set(all_files)))  # 去重并排序 
+    # 过滤出有对应图像文件的JSON文件
+    filtered_files = []
+    for json_file in all_files:
+        if _has_corresponding_image(json_file):
+            filtered_files.append(json_file)
+    
+    return sorted(list(set(filtered_files)))  # 去重并排序
 
 def main():
     """主函数 - 命令行入口和主流程控制"""
