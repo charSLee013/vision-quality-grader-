@@ -6,6 +6,7 @@ import shutil
 import json
 import argparse
 import logging
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from colorama import init, Fore, Style
@@ -47,6 +48,22 @@ def find_image_json_pairs(source_dir):
             
     print(f"{Fore.GREEN}✅ 找到 {len(pairs)} 个有效的图片-JSON文件对。{Style.RESET_ALL}\n")
     return pairs
+
+def get_file_sha256(file_path):
+    """计算文件的SHA256哈希值，适用于大文件。"""
+    sha256 = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            while True:
+                # 读取1MB的数据块
+                data = f.read(1024 * 1024)
+                if not data:
+                    break
+                sha256.update(data)
+        return sha256.hexdigest()
+    except IOError:
+        logging.error(f"无法读取文件进行哈希计算: {file_path}")
+        return None
 
 def evaluate_conditions(data, args):
     """
@@ -134,17 +151,36 @@ def process_image(img_path, json_path, args):
 
         if evaluate_conditions(data, args):
             if not args.dry_run:
-                # 计算目标路径并保持目录结构
-                relative_path = os.path.relpath(img_path, args.source)
-                dest_img_path = os.path.join(args.dest, relative_path)
-                dest_json_path = os.path.splitext(dest_img_path)[0] + '.json'
-                
-                # 创建目标目录
-                os.makedirs(os.path.dirname(dest_img_path), exist_ok=True)
-                
-                # 复制文件
-                shutil.copy2(img_path, dest_img_path)
-                shutil.copy2(json_path, dest_json_path)
+                if args.flat_output:
+                    # 平铺输出模式：使用SHA256重命名并复制到根目录
+                    img_hash = get_file_sha256(img_path)
+                    if not img_hash:
+                        return 'error', img_path # 哈希计算失败
+
+                    _, img_ext = os.path.splitext(img_path)
+                    
+                    dest_img_path = os.path.join(args.dest, f"{img_hash}{img_ext}")
+                    dest_json_path = os.path.join(args.dest, f"{img_hash}.json")
+                    
+                    # 仅创建目标根目录
+                    os.makedirs(args.dest, exist_ok=True)
+                    
+                    # 复制文件
+                    shutil.copy2(img_path, dest_img_path)
+                    shutil.copy2(json_path, dest_json_path)
+
+                else:
+                    # 默认模式：保持目录结构
+                    relative_path = os.path.relpath(img_path, args.source)
+                    dest_img_path = os.path.join(args.dest, relative_path)
+                    dest_json_path = os.path.splitext(dest_img_path)[0] + '.json'
+                    
+                    # 创建目标目录
+                    os.makedirs(os.path.dirname(dest_img_path), exist_ok=True)
+                    
+                    # 复制文件
+                    shutil.copy2(img_path, dest_img_path)
+                    shutil.copy2(json_path, dest_json_path)
 
             return 'copied', img_path
         else:
@@ -203,6 +239,7 @@ def setup_parser():
     parser.add_argument('--logic', type=str, choices=['AND', 'OR'], default='AND', help="多个筛选条件之间的逻辑关系 (默认: AND)。")
     parser.add_argument('--workers', type=int, default=os.cpu_count(), help='并行处理的工作线程数 (默认: 系统CPU核心数)。')
     parser.add_argument('--dry-run', action='store_true', help='模拟运行，只打印操作信息而不实际复制文件。')
+    parser.add_argument('--flat-output', action='store_true', help='将所有文件复制到目标目录的根级别，并以SHA256重命名。')
     parser.add_argument('--log-file', type=str, default='filter_log.txt', help='指定日志文件的路径 (默认: filter_log.txt)。')
     
     return parser
