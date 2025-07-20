@@ -36,3 +36,4 @@ unittest-xml-reporting==3.2.0
 urllib3==2.5.0
 xmltodict==0.14.2
 yarl==1.20.1
+aiohttp

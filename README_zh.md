@@ -20,11 +20,15 @@
 
 ```
 vision-quality-grader/
-├── vlm_common.py           # 共享工具模块
-├── vlm_score_online.py     # 在线推理脚本
-├── test_vlm_common.py      # 公共模块测试
-├── README.md              # 项目说明文档
-└── requirements.txt       # 依赖包列表
+├── vlm_common.py                    # 共享工具模块
+├── vlm_score_online.py              # 在线推理脚本 (3并发)
+├── vlm_score_batch.py               # 批量推理脚本 (50,000并发)
+├── batch_task_pool.py               # 高性能任务池管理器
+├── batch_image_quality_analyzer.py  # 批量推理分析器
+├── batch_processing.py              # 批量处理逻辑
+├── test_vlm_common.py               # 公共模块测试
+├── README.md                        # 项目说明文档
+└── requirements.txt                 # 依赖包列表
 ```
 
 ## 🛠 安装配置
@@ -39,16 +43,27 @@ pip install -r requirements.txt
 ```
 
 ### 3. 环境变量配置
-创建`.env`文件或设置系统环境变量:
+基于`.env.example`创建`.env`文件:
 
 ```bash
-# 必需配置
-export VLM_API_BASE="https://ark.cn-beijing.volces.com"
-export VLM_API_KEY="your_api_key_here"
-export VLM_MODEL_NAME="doubao-vision-pro-32k"
+# 共享配置
+VLM_API_TOKEN=your_api_token_here
 
-# 可选配置
-export VLM_MAX_CONCURRENT="5"  # 并发请求数，默认5
+# 在线推理配置
+VLM_ONLINE_API_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/chat/completions
+VLM_ONLINE_MODEL_NAME=your_online_model_name_here
+
+# 批量推理配置
+VLM_BATCH_API_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/batch/chat/completions
+VLM_BATCH_MODEL_NAME=your_batch_model_name_here
+
+# 请求参数
+VLM_MAX_TOKENS=16384
+VLM_TEMPERATURE=0.3
+VLM_TIMEOUT=3600
+
+# 批量推理并发配置
+VLM_BATCH_CONCURRENT_LIMIT=10000
 ```
 
 ### 4. 验证安装
@@ -60,18 +75,49 @@ python vlm_score_online.py --help
 
 ### 在线推理模式
 
-适用于图片的实时处理，支持高并发异步处理。
+适用于实时处理，支持中等并发（最多3个并发请求）。
 
 ```bash
 # 基本用法
 python vlm_score_online.py --root-dir ./images
 
 # 指定并发数
-python vlm_score_online.py --root-dir ./images --max-concurrent 10
+python vlm_score_online.py --root-dir ./images --max-concurrent 3
+
+# 强制重新处理已有结果
+python vlm_score_online.py --root-dir ./images --force-rerun
 
 # 查看帮助
 python vlm_score_online.py --help
 ```
+
+### 批量推理模式
+
+专为大规模处理设计，支持超高并发（最多50,000个并发请求）。
+
+```bash
+# 基本用法
+python vlm_score_batch.py ./images
+
+# 指定自定义并发限制
+python vlm_score_batch.py ./images --concurrent-limit 25000
+
+# 强制重新处理已有结果
+python vlm_score_batch.py ./images --force-rerun
+
+# 启用调试模式
+python vlm_score_batch.py ./images --debug
+
+# 查看帮助
+python vlm_score_batch.py --help
+```
+
+### 性能对比
+
+| 模式 | 并发数 | 超时时间 | 适用场景 |
+|------|--------|----------|----------|
+| 在线推理 | 3个请求 | 3分钟 | 实时处理、小批量 |
+| 批量推理 | 50,000个请求 | 72小时 | 大规模处理、海量数据集 |
 
 **输出**: 在每个图片同级目录生成对应的`.json`结果文件。
 

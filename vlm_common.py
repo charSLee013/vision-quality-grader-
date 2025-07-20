@@ -63,32 +63,66 @@ USER_PROMPT = """你是一个专业的图片质量评估专家，具备以下能
 """
 
 def validate_config():
-    """验证必需的环境变量配置"""
-    required_vars = ['VLM_API_ENDPOINT', 'VLM_API_TOKEN', 'VLM_MODEL_NAME']
+    """验证在线推理的必需环境变量配置"""
+    required_vars = ['VLM_ONLINE_API_ENDPOINT', 'VLM_API_TOKEN', 'VLM_ONLINE_MODEL_NAME']
     missing_vars = []
-    
+
     for var in required_vars:
         if not os.getenv(var):
             missing_vars.append(var)
-    
+
     if missing_vars:
         raise ValueError(f"缺少必需的环境变量: {', '.join(missing_vars)}。请检查 .env 文件配置。")
-    
+
     # 打印配置信息（掩码敏感信息）
     token = os.getenv('VLM_API_TOKEN', '')
     masked_token = token[:8] + '*' * (len(token) - 12) + token[-4:] if len(token) > 12 else '***'
-    
-    print(f"{Fore.GREEN}✓ 配置加载完成:{Style.RESET_ALL}")
-    print(f"  🌐 API端点: {Fore.CYAN}{os.getenv('VLM_API_ENDPOINT')}{Style.RESET_ALL}")
-    print(f"  🔑 API令牌: {Fore.YELLOW}{masked_token}{Style.RESET_ALL}")
-    print(f"  🤖 模型名称: {Fore.MAGENTA}{os.getenv('VLM_MODEL_NAME')}{Style.RESET_ALL}")
-    print(f"  🚀 并发数量: {Fore.BLUE}{os.getenv('CONCURRENT_LIMIT', '3')}{Style.RESET_ALL}")
-    
+
+    print("Configuration loaded:")
+    print(f"  API endpoint: {os.getenv('VLM_ONLINE_API_ENDPOINT')}")
+    print(f"  API token: {masked_token}")
+    print(f"  Model name: {os.getenv('VLM_ONLINE_MODEL_NAME')}")
+    print(f"  Concurrent limit: {os.getenv('CONCURRENT_LIMIT', '3')}")
+
     # 返回配置字典
     return {
-        'api_base': os.getenv('VLM_API_ENDPOINT'),
+        'api_base': os.getenv('VLM_ONLINE_API_ENDPOINT'),
         'api_key': os.getenv('VLM_API_TOKEN'),
-        'model_name': os.getenv('VLM_MODEL_NAME'),
+        'model_name': os.getenv('VLM_ONLINE_MODEL_NAME'),
+        'max_tokens': int(os.getenv('VLM_MAX_TOKENS', '16384')),
+        'temperature': float(os.getenv('VLM_TEMPERATURE', '0.3')),
+        'timeout': int(os.getenv('VLM_TIMEOUT', '180')),
+        'concurrent_limit': int(os.getenv('CONCURRENT_LIMIT', '3'))
+    }
+
+
+def validate_batch_config():
+    """验证批量推理的必需环境变量配置"""
+    required_vars = ['VLM_BATCH_API_ENDPOINT', 'VLM_API_TOKEN', 'VLM_BATCH_MODEL_NAME']
+    missing_vars = []
+
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+
+    if missing_vars:
+        raise ValueError(f"缺少必需的环境变量: {', '.join(missing_vars)}。请检查 .env 文件配置。")
+
+    # 打印配置信息（掩码敏感信息）
+    token = os.getenv('VLM_API_TOKEN', '')
+    masked_token = token[:8] + '*' * (len(token) - 12) + token[-4:] if len(token) > 12 else '***'
+
+    print("Configuration loaded:")
+    print(f"  API endpoint: {os.getenv('VLM_BATCH_API_ENDPOINT')}")
+    print(f"  API token: {masked_token}")
+    print(f"  Model name: {os.getenv('VLM_BATCH_MODEL_NAME')}")
+    print(f"  Concurrent limit: {os.getenv('CONCURRENT_LIMIT', '3')}")
+
+    # 返回配置字典
+    return {
+        'api_base': os.getenv('VLM_BATCH_API_ENDPOINT'),
+        'api_key': os.getenv('VLM_API_TOKEN'),
+        'model_name': os.getenv('VLM_BATCH_MODEL_NAME'),
         'max_tokens': int(os.getenv('VLM_MAX_TOKENS', '16384')),
         'temperature': float(os.getenv('VLM_TEMPERATURE', '0.3')),
         'timeout': int(os.getenv('VLM_TIMEOUT', '180')),
@@ -347,39 +381,39 @@ class CostCalculator:
     def format_cost_report(self, processing_time=0, image_count=0):
         """格式化成本报告"""
         cost_data = self.calculate_cost()
-        
-        report = f"\n{Fore.CYAN}💰 成本分析报告:{Style.RESET_ALL}\n"
-        report += f"{'='*50}\n"
-        
+
+        report = "\nCost Analysis Report:\n"
+        report += "-" * 40 + "\n"
+
         # Token使用统计
-        report += f"{Fore.YELLOW}📊 Token使用统计:{Style.RESET_ALL}\n"
-        report += f"  🔤 输入Token:     {Fore.GREEN}{cost_data['input_tokens']:,}{Style.RESET_ALL}\n"
-        report += f"  📝 输出Token:     {Fore.GREEN}{cost_data['output_tokens']:,}{Style.RESET_ALL}\n"
+        report += "Token Usage:\n"
+        report += f"  Input tokens: {cost_data['input_tokens']:,}\n"
+        report += f"  Output tokens: {cost_data['output_tokens']:,}\n"
         if cost_data['reasoning_tokens'] > 0:
-            report += f"  🧠 推理Token:     {Fore.BLUE}{cost_data['reasoning_tokens']:,}{Style.RESET_ALL}\n"
-        report += f"  📊 总输出Token:   {Fore.MAGENTA}{cost_data['total_output_tokens']:,}{Style.RESET_ALL}\n"
-        
+            report += f"  Reasoning tokens: {cost_data['reasoning_tokens']:,}\n"
+        report += f"  Total output tokens: {cost_data['total_output_tokens']:,}\n"
+
         # 费用计算
-        report += f"\n{Fore.YELLOW}💳 费用计算:{Style.RESET_ALL}\n"
-        report += f"  💵 输入费用:     {Fore.GREEN}¥{cost_data['input_cost']:.4f}{Style.RESET_ALL}\n"
-        report += f"  💵 输出费用:     {Fore.GREEN}¥{cost_data['output_cost']:.4f}{Style.RESET_ALL}\n"
-        report += f"  💰 总费用:       {Fore.RED}¥{cost_data['total_cost']:.4f}{Style.RESET_ALL}\n"
-        
+        report += "\nCost Breakdown:\n"
+        report += f"  Input cost: ¥{cost_data['input_cost']:.4f}\n"
+        report += f"  Output cost: ¥{cost_data['output_cost']:.4f}\n"
+        report += f"  Total cost: ¥{cost_data['total_cost']:.4f}\n"
+
         # 平均成本
         if image_count > 0:
             avg_cost = cost_data['total_cost'] / image_count
-            report += f"  📷 单张图片成本: {Fore.CYAN}¥{avg_cost:.4f}{Style.RESET_ALL}\n"
-        
+            report += f"  Cost per image: ¥{avg_cost:.4f}\n"
+
         # 请求统计
-        report += f"\n{Fore.YELLOW}📈 请求统计:{Style.RESET_ALL}\n"
-        report += f"  ✅ 成功请求:     {Fore.GREEN}{cost_data['successful_requests']}{Style.RESET_ALL}\n"
-        report += f"  📊 总请求数:     {Fore.BLUE}{cost_data['total_requests']}{Style.RESET_ALL}\n"
-        
+        report += "\nRequest Statistics:\n"
+        report += f"  Successful requests: {cost_data['successful_requests']}\n"
+        report += f"  Total requests: {cost_data['total_requests']}\n"
+
         # 效率统计
         if processing_time > 0:
             cost_per_second = cost_data['total_cost'] / processing_time
-            report += f"  ⏱️  每秒成本:     {Fore.MAGENTA}¥{cost_per_second:.6f}{Style.RESET_ALL}\n"
-        
-        report += f"{'='*50}\n"
-        
-        return report, cost_data 
+            report += f"  Cost per second: ¥{cost_per_second:.6f}\n"
+
+        report += "-" * 40 + "\n"
+
+        return report, cost_data

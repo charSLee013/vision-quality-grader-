@@ -26,9 +26,9 @@ from vlm_common import (
 class ImageQualityAnalyzer:
     def __init__(self, model_name=None, concurrent_limit=None):
         """初始化异步API客户端，使用环境变量配置"""
-        self.api_endpoint = os.getenv('VLM_API_ENDPOINT')
+        self.api_endpoint = os.getenv('VLM_ONLINE_API_ENDPOINT')
         self.api_token = os.getenv('VLM_API_TOKEN')
-        self.model_name = model_name or os.getenv('VLM_MODEL_NAME')
+        self.model_name = model_name or os.getenv('VLM_ONLINE_MODEL_NAME')
         self.max_tokens = int(os.getenv('VLM_MAX_TOKENS', '16384'))
         self.temperature = float(os.getenv('VLM_TEMPERATURE', '0.3'))
         self.timeout = int(os.getenv('VLM_TIMEOUT', '180'))

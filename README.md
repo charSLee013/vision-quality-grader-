@@ -20,11 +20,15 @@ An intelligent image quality assessment tool based on the Volcano Engine Vision 
 
 ```
 vision-quality-grader/
-├── vlm_common.py           # Shared utility module
-├── vlm_score_online.py     # Online inference script
-├── test_vlm_common.py      # Test script for common module
-├── README.md              # Project documentation
-└── requirements.txt       # Dependency list
+├── vlm_common.py                    # Shared utility module
+├── vlm_score_online.py              # Online inference script (3 concurrent)
+├── vlm_score_batch.py               # Batch inference script (50,000 concurrent)
+├── batch_task_pool.py               # High-performance task pool manager
+├── batch_image_quality_analyzer.py  # Batch inference analyzer
+├── batch_processing.py              # Batch processing logic
+├── test_vlm_common.py               # Test script for common module
+├── README.md                        # Project documentation
+└── requirements.txt                 # Dependency list
 ```
 
 ## 🛠 Installation & Configuration
@@ -39,16 +43,27 @@ pip install -r requirements.txt
 ```
 
 ### 3. Environment Variables
-Create a `.env` file or set system environment variables:
+Create a `.env` file based on `.env.example`:
 
 ```bash
-# Required
-export VLM_API_BASE="https://ark.cn-beijing.volces.com"
-export VLM_API_KEY="your_api_key_here"
-export VLM_MODEL_NAME="doubao-vision-pro-32k"
+# Shared configuration
+VLM_API_TOKEN=your_api_token_here
 
-# Optional
-export VLM_MAX_CONCURRENT="5"  # Max concurrent requests, default is 5
+# Online inference configuration
+VLM_ONLINE_API_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/chat/completions
+VLM_ONLINE_MODEL_NAME=your_online_model_name_here
+
+# Batch inference configuration
+VLM_BATCH_API_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/batch/chat/completions
+VLM_BATCH_MODEL_NAME=your_batch_model_name_here
+
+# Request parameters
+VLM_MAX_TOKENS=16384
+VLM_TEMPERATURE=0.3
+VLM_TIMEOUT=3600
+
+# Batch inference concurrent configuration
+VLM_BATCH_CONCURRENT_LIMIT=10000
 ```
 
 ### 4. Verify Installation
@@ -60,18 +75,49 @@ python vlm_score_online.py --help
 
 ### Online Inference Mode
 
-Ideal for real-time processing of images with high-concurrency support.
+Ideal for real-time processing with moderate concurrency (up to 3 concurrent requests).
 
 ```bash
 # Basic usage
 python vlm_score_online.py --root-dir ./images
 
 # Specify concurrency limit
-python vlm_score_online.py --root-dir ./images --max-concurrent 10
+python vlm_score_online.py --root-dir ./images --max-concurrent 3
+
+# Force reprocess existing results
+python vlm_score_online.py --root-dir ./images --force-rerun
 
 # Show help
 python vlm_score_online.py --help
 ```
+
+### Batch Inference Mode
+
+Designed for large-scale processing with ultra-high concurrency (up to 50,000 concurrent requests).
+
+```bash
+# Basic usage
+python vlm_score_batch.py ./images
+
+# Specify custom concurrency limit
+python vlm_score_batch.py ./images --concurrent-limit 25000
+
+# Force reprocess existing results
+python vlm_score_batch.py ./images --force-rerun
+
+# Enable debug mode
+python vlm_score_batch.py ./images --debug
+
+# Show help
+python vlm_score_batch.py --help
+```
+
+### Performance Comparison
+
+| Mode | Concurrency | Timeout | Best For |
+|------|-------------|---------|----------|
+| Online | 3 requests | 3 minutes | Real-time processing, small batches |
+| Batch | 50,000 requests | 72 hours | Large-scale processing, massive datasets |
 
 **Output**: A corresponding `.json` file is generated in the same directory as each image.
 
@@ -105,8 +151,13 @@ python vlm_score_online.py --help
 
 #### Configuration Validation
 ```python
+# For online inference
 from vlm_common import validate_config
 config = validate_config()
+
+# For batch inference
+from vlm_common import validate_batch_config
+config = validate_batch_config()
 ```
 
 #### Image Processing
