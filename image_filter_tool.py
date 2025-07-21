@@ -7,9 +7,58 @@ import json
 import argparse
 import logging
 import hashlib
+import asyncio
+import aiofiles
+from typing import AsyncGenerator, Tuple, Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
+from tqdm.asyncio import tqdm
 from colorama import init, Fore, Style
+
+# 导入批处理任务池
+try:
+    from batch_task_pool import BatchTaskPool
+except ImportError:
+    # 如果找不到BatchTaskPool，创建一个简化版本
+    class BatchTaskPool:
+        """简化版任务池，用于并发处理"""
+        def __init__(self, max_concurrent=200):
+            self.semaphore = asyncio.Semaphore(max_concurrent)
+            self.active_tasks = {}
+            self.task_counter = 0
+            self.completed_count = 0
+            self.failed_count = 0
+
+        async def submit_task(self, coro, task_data):
+            await self.semaphore.acquire()
+            task_id = f"task_{self.task_counter}"
+            self.task_counter += 1
+
+            task = asyncio.create_task(self._execute_task(coro, task_id))
+            self.active_tasks[task_id] = task
+            return task_id, task
+
+        async def _execute_task(self, coro, task_id):
+            try:
+                result = await coro
+                self.completed_count += 1
+                return result
+            except Exception as e:
+                self.failed_count += 1
+                return {"status": "error", "error": str(e)}
+            finally:
+                self.semaphore.release()
+                if task_id in self.active_tasks:
+                    del self.active_tasks[task_id]
+
+        def get_stats(self):
+            total = self.completed_count + self.failed_count
+            success_rate = (self.completed_count / total * 100) if total > 0 else 0
+            return {
+                "total_submitted": self.task_counter,
+                "completed": self.completed_count,
+                "failed": self.failed_count,
+                "success_rate": success_rate
+            }
 
 # 初始化colorama
 init(autoreset=True)
@@ -49,6 +98,70 @@ def find_image_json_pairs(source_dir):
     print(f"{Fore.GREEN}✅ 找到 {len(pairs)} 个有效的图片-JSON文件对。{Style.RESET_ALL}\n")
     return pairs
 
+async def discover_image_json_pairs_streaming(source_dir: str) -> AsyncGenerator[Tuple[str, str], None]:
+    """
+    流式发现图片-JSON文件对，单次文件系统遍历
+
+    优化特性:
+    - 单次os.walk遍历同时识别图片和JSON文件
+    - 实时yield有效文件对，支持流式处理
+    - 避免构建大型文件列表，减少内存使用
+
+    Args:
+        source_dir: 要扫描的源目录
+
+    Yields:
+        Tuple[str, str]: (图片路径, JSON路径)
+    """
+    # 图片扩展名集合（包含大小写变体）
+    image_extensions = set()
+    for ext in IMAGE_EXTENSIONS:
+        image_extensions.add(ext.lower())
+        image_extensions.add(ext.upper())
+
+    discovered_count = 0
+
+    try:
+        # 使用os.walk进行高效递归遍历
+        for root, dirs, files in os.walk(source_dir):
+            # 在当前目录中查找图片-JSON文件对
+            image_files = set()
+            json_files = set()
+
+            # 分类文件
+            for file in files:
+                file_path = os.path.join(root, file)
+                _, ext = os.path.splitext(file)
+
+                if ext in image_extensions:
+                    image_files.add(os.path.splitext(file)[0])  # 不带扩展名的基础名
+                elif ext.lower() == '.json':
+                    json_files.add(os.path.splitext(file)[0])   # 不带扩展名的基础名
+
+            # 找到匹配的图片-JSON对
+            matching_pairs = image_files.intersection(json_files)
+
+            for base_name in matching_pairs:
+                img_path = None
+                json_path = os.path.join(root, base_name + '.json')
+
+                # 找到对应的图片文件（可能有不同扩展名）
+                for file in files:
+                    if os.path.splitext(file)[0] == base_name and os.path.splitext(file)[1] in image_extensions:
+                        img_path = os.path.join(root, file)
+                        break
+
+                if img_path:
+                    discovered_count += 1
+                    yield img_path, json_path
+
+                    # 每发现100个文件就让出控制权，保持响应性
+                    if discovered_count % 100 == 0:
+                        await asyncio.sleep(0)
+
+    except (PermissionError, OSError) as e:
+        logging.warning(f"扫描目录时遇到错误: {e}")
+
 def get_file_sha256(file_path):
     """计算文件的SHA256哈希值，适用于大文件。"""
     sha256 = hashlib.sha256()
@@ -57,6 +170,22 @@ def get_file_sha256(file_path):
             while True:
                 # 读取1MB的数据块
                 data = f.read(1024 * 1024)
+                if not data:
+                    break
+                sha256.update(data)
+        return sha256.hexdigest()
+    except IOError:
+        logging.error(f"无法读取文件进行哈希计算: {file_path}")
+        return None
+
+async def get_file_sha256_async(file_path: str) -> str:
+    """异步计算文件的SHA256哈希值，适用于大文件。"""
+    sha256 = hashlib.sha256()
+    try:
+        async with aiofiles.open(file_path, "rb") as f:
+            while True:
+                # 读取1MB的数据块
+                data = await f.read(1024 * 1024)
                 if not data:
                     break
                 sha256.update(data)
@@ -193,6 +322,86 @@ def process_image(img_path, json_path, args):
         logging.error(f"处理 {img_path} 时发生未知错误: {e}")
         return 'error', img_path
 
+async def process_image_async(img_path: str, json_path: str, args) -> Dict[str, Any]:
+    """
+    异步处理单个图片-JSON文件对
+
+    Args:
+        img_path: 图片文件路径
+        json_path: JSON文件路径
+        args: 命令行参数
+
+    Returns:
+        Dict: 处理结果 {"status": str, "path": str, "details": str}
+    """
+    try:
+        # 使用aiofiles异步读取JSON文件
+        async with aiofiles.open(json_path, 'r', encoding='utf-8') as f:
+            content = await f.read()
+            data = json.loads(content)
+
+        if evaluate_conditions(data, args):
+            if not args.dry_run:
+                if args.flat_output:
+                    # 平铺输出模式：使用SHA256重命名并复制到根目录
+                    img_hash = await get_file_sha256_async(img_path)
+                    if not img_hash:
+                        return {"status": "error", "path": img_path, "details": "哈希计算失败"}
+
+                    _, img_ext = os.path.splitext(img_path)
+
+                    dest_img_path = os.path.join(args.dest, f"{img_hash}{img_ext}")
+                    dest_json_path = os.path.join(args.dest, f"{img_hash}.json")
+
+                    # 仅创建目标根目录
+                    os.makedirs(args.dest, exist_ok=True)
+
+                    # 异步复制文件
+                    await asyncio.gather(
+                        copy_file_async(img_path, dest_img_path),
+                        copy_file_async(json_path, dest_json_path)
+                    )
+
+                else:
+                    # 默认模式：保持目录结构
+                    relative_path = os.path.relpath(img_path, args.source)
+                    dest_img_path = os.path.join(args.dest, relative_path)
+                    dest_json_path = os.path.splitext(dest_img_path)[0] + '.json'
+
+                    # 创建目标目录
+                    os.makedirs(os.path.dirname(dest_img_path), exist_ok=True)
+
+                    # 异步复制文件
+                    await asyncio.gather(
+                        copy_file_async(img_path, dest_img_path),
+                        copy_file_async(json_path, dest_json_path)
+                    )
+
+            return {"status": "copied", "path": img_path, "details": "成功复制"}
+        else:
+            return {"status": "skipped", "path": img_path, "details": "不满足筛选条件"}
+
+    except json.JSONDecodeError:
+        logging.error(f"JSON文件格式错误: {json_path}")
+        return {"status": "error", "path": json_path, "details": "JSON格式错误"}
+    except Exception as e:
+        logging.error(f"处理 {img_path} 时发生未知错误: {e}")
+        return {"status": "error", "path": img_path, "details": str(e)}
+
+async def copy_file_async(src_path: str, dest_path: str):
+    """异步复制文件"""
+    try:
+        async with aiofiles.open(src_path, 'rb') as src:
+            async with aiofiles.open(dest_path, 'wb') as dest:
+                while True:
+                    chunk = await src.read(1024 * 1024)  # 1MB chunks
+                    if not chunk:
+                        break
+                    await dest.write(chunk)
+    except Exception as e:
+        logging.error(f"复制文件失败 {src_path} -> {dest_path}: {e}")
+        raise
+
 def setup_logging(log_file):
     """配置日志记录"""
     logging.basicConfig(
@@ -244,63 +453,179 @@ def setup_parser():
     
     return parser
 
-def main():
-    """主函数，编排整个筛选和复制流程"""
+async def process_images_concurrent(
+    image_pairs: List[Tuple[str, str]],
+    args,
+    max_concurrent: int = 200
+) -> Dict[str, int]:
+    """
+    并发处理图片文件对
+
+    Args:
+        image_pairs: 图片-JSON文件对列表
+        args: 命令行参数
+        max_concurrent: 最大并发数
+
+    Returns:
+        Dict[str, int]: 处理结果统计
+    """
+    if not image_pairs:
+        return {'copied': 0, 'skipped': 0, 'error': 0}
+
+    # 初始化任务池
+    task_pool = BatchTaskPool(max_concurrent=max_concurrent)
+    results = []
+    pending_tasks = {}
+
+    print(f"ASYNC: {max_concurrent} coroutines")
+
+    # 使用tqdm显示处理进度
+    with tqdm(total=len(image_pairs), desc="PROCESS", unit="pairs", ncols=80) as pbar:
+
+        # 提交所有任务
+        for img_path, json_path in image_pairs:
+            coro = process_image_async(img_path, json_path, args)
+            task_data = {"path": img_path}
+
+            task_id, task = await task_pool.submit_task(coro, task_data)
+            pending_tasks[task_id] = {"task": task, "data": task_data}
+
+        # 收集完成的任务
+        while pending_tasks:
+            completed_task_ids = []
+
+            for task_id, task_info in pending_tasks.items():
+                if task_info["task"].done():
+                    try:
+                        result = await task_info["task"]
+                        results.append(result)
+
+                        # 更新进度条
+                        pbar.update(1)
+
+                        # 显示处理状态
+                        filename = os.path.basename(result.get("path", "unknown"))
+                        status = result.get("status", "unknown")
+
+                        if status == "copied":
+                            pbar.set_postfix_str(f"OK {filename}")
+                        elif status == "skipped":
+                            pbar.set_postfix_str(f"SKIP {filename}")
+                        else:
+                            pbar.set_postfix_str(f"ERR {filename}")
+
+                    except Exception as e:
+                        # 处理任务异常
+                        error_result = {
+                            "status": "error",
+                            "path": task_info["data"]["path"],
+                            "details": f"任务执行错误: {str(e)}"
+                        }
+                        results.append(error_result)
+                        pbar.update(1)
+
+                        filename = os.path.basename(task_info["data"]["path"])
+                        pbar.set_postfix_str(f"{Fore.RED}✗{Style.RESET_ALL} {filename}")
+
+                    completed_task_ids.append(task_id)
+
+            # 移除已完成的任务
+            for task_id in completed_task_ids:
+                pending_tasks.pop(task_id)
+
+            # 如果还有未完成的任务，短暂等待
+            if pending_tasks:
+                await asyncio.sleep(0.1)
+
+    # 统计结果
+    result_counts = {'copied': 0, 'skipped': 0, 'error': 0}
+    for result in results:
+        status = result.get("status", "error")
+        if status in result_counts:
+            result_counts[status] += 1
+        else:
+            result_counts['error'] += 1
+
+    # 显示任务池统计
+    stats = task_pool.get_stats()
+    print(f"STATS: {stats['success_rate']:.1f}% success ({stats['completed']}/{stats['total_submitted']})")
+
+    return result_counts
+
+async def main_async():
+    """异步主函数，实现流式进度条和并发处理"""
     parser = setup_parser()
     args = parser.parse_args()
     
-    # 打印参数
-    print(f"{Fore.CYAN}--- 配置参数 ---{Style.RESET_ALL}")
-    for key, value in vars(args).items():
-        print(f"  {key:<15}: {Fore.YELLOW}{value}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}------------------{Style.RESET_ALL}\n")
+    # 获取实际的并发配置
+    max_concurrent = int(os.getenv('IMAGE_FILTER_CONCURRENT_LIMIT', '200'))
+
+    # DOS风格配置显示
+    print("=" * 60)
+    print("IMAGE FILTER v2.0 - ASYNC EDITION")
+    print("=" * 60)
+    print(f"SOURCE: {args.source}")
+    print(f"DEST  : {args.dest}")
+    print(f"FILTER: {args.score or 'NONE'} | AI:{args.is_ai or 'ANY'} | WM:{args.has_watermark or 'ANY'}")
+    print(f"ASYNC : {max_concurrent} COROUTINES")
+    if args.dry_run:
+        print("MODE  : DRY RUN (SIMULATION)")
+    print("=" * 60)
 
     # 配置日志
     setup_logging(args.log_file)
 
-    # 检查是否有任何筛选条件
+    # 检查筛选条件
     if not any([args.score, args.is_ai, args.has_watermark]):
-        print(f"{Fore.YELLOW}⚠️ 警告: 未指定任何筛选条件，将不会有文件被复制。{Style.RESET_ALL}")
-        # 可以选择在这里退出，或者继续执行一个空操作
-        # return
-
-    if args.dry_run:
-        print(f"{Fore.MAGENTA}*** 模拟运行模式已激活 ***{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}将只显示操作信息，不会实际复制任何文件。{Style.RESET_ALL}\n")
-
-    # 查找文件对
-    image_pairs = find_image_json_pairs(args.source)
-    if not image_pairs:
-        print(f"{Fore.YELLOW}⚠️ 在源目录中未找到任何有效的图片-JSON文件对。程序退出。{Style.RESET_ALL}")
+        print("WARNING: No filter conditions specified!")
         return
 
-    # 并行处理
-    results = {'copied': 0, 'skipped': 0, 'error': 0}
-    
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        # 创建future任务列表
-        futures = {executor.submit(process_image, img_path, json_path, args): (img_path, json_path)
-                   for img_path, json_path in image_pairs}
-        
-        # 使用tqdm显示进度条
-        pbar = tqdm(as_completed(futures), total=len(image_pairs), desc=f"{Fore.GREEN}筛选进度{Style.RESET_ALL}")
-        for future in pbar:
-            try:
-                status, path = future.result()
-                results[status] += 1
-                pbar.set_postfix_str(f"状态: {status}, 文件: {os.path.basename(path)}")
-            except Exception as e:
-                results['error'] += 1
-                logging.error(f"一个工作线程发生严重错误: {e}")
+    # 文件发现阶段
+    print("\nSCANNING...")
+    image_pairs = []
+    discovered_count = 0
 
-    # 打印最终报告
-    print(f"\n{Fore.CYAN}--- 处理完成 ---{Style.RESET_ALL}")
-    print(f"  ✅ {Fore.GREEN}成功复制: {results['copied']} 个文件对{Style.RESET_ALL}")
-    print(f"  ⏭️ {Fore.BLUE}跳过处理: {results['skipped']} 个文件对{Style.RESET_ALL}")
-    print(f"  ❌ {Fore.RED}发生错误: {results['error']} 个文件对{Style.RESET_ALL}")
-    print(f"  📝 详细日志已保存到: {args.log_file}")
+    # 使用流式发现并显示实时进度
+    with tqdm(desc="DISCOVER", unit="pairs", ncols=80) as discovery_pbar:
+        async for img_path, json_path in discover_image_json_pairs_streaming(args.source):
+            image_pairs.append((img_path, json_path))
+            discovered_count += 1
+            discovery_pbar.update(1)
+
+            # 每发现1000个文件就让出控制权
+            if discovered_count % 1000 == 0:
+                await asyncio.sleep(0)
+
+    if not image_pairs:
+        print("ERROR: No image-JSON pairs found!")
+        return
+
+    print(f"FOUND: {len(image_pairs)} pairs")
+
+    # 处理阶段
+    print("PROCESSING...")
+    results = await process_images_concurrent(
+        image_pairs,
+        args,
+        max_concurrent=max_concurrent
+    )
+
+    # 结果统计
+    print("\n" + "=" * 60)
+    print("RESULTS:")
+    print(f"COPIED : {results['copied']}")
+    print(f"SKIPPED: {results['skipped']}")
+    print(f"ERRORS : {results['error']}")
+    print(f"LOG    : {args.log_file}")
     if args.dry_run:
-        print(f"{Fore.MAGENTA}\n*** 模拟运行结束 ***{Style.RESET_ALL}")
+        print("STATUS : SIMULATION COMPLETE")
+    else:
+        print("STATUS : OPERATION COMPLETE")
+    print("=" * 60)
+
+def main():
+    """同步入口点，调用异步主函数"""
+    return asyncio.run(main_async())
 
 if __name__ == "__main__":
-    main() 
+    main()

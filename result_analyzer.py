@@ -2,14 +2,62 @@
 # -*- coding: utf-8 -*-
 
 import os
-import glob
 import json
 import argparse
 import traceback
-from typing import Dict, List, Tuple, Optional, Any
+import asyncio
+import aiofiles
+from typing import Dict, List, Tuple, Optional, Any, AsyncGenerator
 from pathlib import Path
 from colorama import init, Fore, Style
 import pandas as pd
+from tqdm.asyncio import tqdm
+
+# 导入批处理任务池
+try:
+    from batch_task_pool import BatchTaskPool
+except ImportError:
+    # 如果找不到BatchTaskPool，创建一个简化版本
+    class BatchTaskPool:
+        """简化版任务池，用于并发处理"""
+        def __init__(self, max_concurrent=200):
+            self.semaphore = asyncio.Semaphore(max_concurrent)
+            self.active_tasks = {}
+            self.task_counter = 0
+            self.completed_count = 0
+            self.failed_count = 0
+
+        async def submit_task(self, coro, task_data):
+            await self.semaphore.acquire()
+            task_id = f"task_{self.task_counter}"
+            self.task_counter += 1
+
+            task = asyncio.create_task(self._execute_task(coro, task_id))
+            self.active_tasks[task_id] = task
+            return task_id, task
+
+        async def _execute_task(self, coro, task_id):
+            try:
+                result = await coro
+                self.completed_count += 1
+                return result
+            except Exception as e:
+                self.failed_count += 1
+                return {"status": "error", "error": str(e)}
+            finally:
+                self.semaphore.release()
+                if task_id in self.active_tasks:
+                    del self.active_tasks[task_id]
+
+        def get_stats(self):
+            total = self.completed_count + self.failed_count
+            success_rate = (self.completed_count / total * 100) if total > 0 else 0
+            return {
+                "total_submitted": self.task_counter,
+                "completed": self.completed_count,
+                "failed": self.failed_count,
+                "success_rate": success_rate
+            }
 
 # 初始化colorama用于彩色输出
 init(autoreset=True)
@@ -651,24 +699,17 @@ class ReportGenerator:
 def find_image_files(root_dir: str, image_extensions: Tuple[str, ...] = IMAGE_EXTENSIONS) -> List[str]:
     """
     递归查找所有图片文件
-    
+
     Args:
         root_dir: 搜索根目录
         image_extensions: 图片文件扩展名元组
-        
+
     Returns:
         找到的图片文件路径列表
     """
-    all_images = []
-    for ext in image_extensions:
-        # 搜索小写扩展名
-        pattern = os.path.join(root_dir, '**', f'*{ext}')
-        all_images.extend(glob.glob(pattern, recursive=True))
-        # 搜索大写扩展名
-        pattern = os.path.join(root_dir, '**', f'*{ext.upper()}')
-        all_images.extend(glob.glob(pattern, recursive=True))
-    
-    return sorted(list(set(all_images)))  # 去重并排序
+    # 使用优化后的vlm_common.find_images实现
+    from vlm_common import find_images
+    return find_images(root_dir, image_extensions)
 
 
 def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -> List[str]:
@@ -710,16 +751,252 @@ def find_result_files(root_dir: str, extensions: Tuple[str, ...] = ('.json',)) -
     # 如果没有找到任何对应的JSON文件，回退到原始方法（向后兼容）
     if not valid_json_files:
         print(f"{Fore.YELLOW}⚠️ 未找到图片对应的JSON文件，回退到搜索所有JSON文件{Style.RESET_ALL}")
-        all_files = []
-        for ext in extensions:
-            pattern = os.path.join(root_dir, '**', f'*{ext}')
-            all_files.extend(glob.glob(pattern, recursive=True))
-        return sorted(list(set(all_files)))
+        all_files = set()
+        # 使用os.walk替代glob进行文件搜索
+        try:
+            for root, dirs, files in os.walk(root_dir):
+                for file in files:
+                    for ext in extensions:
+                        if file.lower().endswith(ext.lower()) or file.lower().endswith(ext.upper()):
+                            all_files.add(os.path.join(root, file))
+        except (PermissionError, OSError):
+            pass
+        return sorted(list(all_files))
     
     return sorted(valid_json_files)
 
-def main():
-    """主函数 - 命令行入口和主流程控制"""
+async def discover_image_json_pairs_streaming(root_dir: str) -> AsyncGenerator[str, None]:
+    """
+    流式发现图片-JSON文件对，单次文件系统遍历
+
+    优化特性:
+    - 单次os.walk遍历同时识别图片和JSON文件
+    - 实时yield有效JSON文件路径，支持流式处理
+    - 避免构建大型文件列表，减少内存使用
+
+    Args:
+        root_dir: 搜索根目录
+
+    Yields:
+        str: 有效的JSON结果文件路径
+    """
+    # 图片扩展名集合
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.JPG', '.JPEG', '.PNG', '.BMP', '.WEBP'}
+
+    discovered_count = 0
+
+    try:
+        # 使用os.walk进行高效递归遍历
+        for root, dirs, files in os.walk(root_dir):
+            # 在当前目录中查找图片-JSON文件对
+            image_files = set()
+            json_files = set()
+
+            # 分类文件
+            for file in files:
+                file_path = os.path.join(root, file)
+                _, ext = os.path.splitext(file)
+
+                if ext in image_extensions:
+                    image_files.add(os.path.splitext(file)[0])  # 不带扩展名的基础名
+                elif ext.lower() == '.json':
+                    json_files.add(os.path.splitext(file)[0])   # 不带扩展名的基础名
+
+            # 找到匹配的图片-JSON对
+            matching_pairs = image_files.intersection(json_files)
+
+            for base_name in matching_pairs:
+                json_path = os.path.join(root, base_name + '.json')
+                discovered_count += 1
+                yield json_path
+
+                # 每发现100个文件就让出控制权，保持响应性
+                if discovered_count % 100 == 0:
+                    await asyncio.sleep(0)
+
+    except (PermissionError, OSError) as e:
+        print(f"{Fore.YELLOW}警告: 扫描目录时遇到错误: {e}{Style.RESET_ALL}")
+
+async def validate_single_file_async(validator: 'JsonValidator', file_path: str) -> Dict[str, Any]:
+    """
+    异步验证单个JSON文件
+
+    Args:
+        validator: JsonValidator实例
+        file_path: JSON文件路径
+
+    Returns:
+        Dict: 验证结果
+    """
+    try:
+        # 使用aiofiles异步读取文件
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            content = await f.read()
+            data = json.loads(content)
+
+        # 使用现有的验证逻辑（线程安全）
+        validation_result = {
+            'file_path': file_path,
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'data': data
+        }
+
+        # 执行各项验证（复用现有逻辑）
+        field_errors = validator._validate_required_fields(data)
+        if field_errors:
+            validation_result['errors'].extend(field_errors)
+            validation_result['is_valid'] = False
+
+        type_errors = validator._validate_field_types(data)
+        if type_errors:
+            validation_result['errors'].extend(type_errors)
+            validation_result['is_valid'] = False
+
+        range_errors = validator._validate_value_ranges(data)
+        if range_errors:
+            validation_result['errors'].extend(range_errors)
+            validation_result['is_valid'] = False
+
+        warnings = validator._generate_warnings(data)
+        validation_result['warnings'].extend(warnings)
+
+        # 线程安全地更新统计信息
+        validator.validation_stats['total_files'] += 1
+        if validation_result['is_valid']:
+            validator.validation_stats['valid_files'] += 1
+        else:
+            validator.validation_stats['invalid_files'] += 1
+            validator.detailed_errors.append(validation_result)
+
+        return validation_result
+
+    except json.JSONDecodeError as e:
+        validator.validation_stats['total_files'] += 1
+        validator.validation_stats['parse_errors'] += 1
+        validator.validation_stats['invalid_files'] += 1
+
+        error_result = {
+            'file_path': file_path,
+            'is_valid': False,
+            'errors': [f"JSON解析错误: {str(e)}"],
+            'warnings': [],
+            'data': None
+        }
+        validator.detailed_errors.append(error_result)
+        return error_result
+
+    except Exception as e:
+        validator.validation_stats['total_files'] += 1
+        validator.validation_stats['invalid_files'] += 1
+
+        error_result = {
+            'file_path': file_path,
+            'is_valid': False,
+            'errors': [f"文件读取错误: {str(e)}"],
+            'warnings': [],
+            'data': None
+        }
+        validator.detailed_errors.append(error_result)
+        return error_result
+
+async def process_json_files_concurrent(
+    json_files: List[str],
+    validator: 'JsonValidator',
+    max_concurrent: int = 200,
+    verbose: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    并发处理JSON文件验证
+
+    Args:
+        json_files: JSON文件路径列表
+        validator: JsonValidator实例
+        max_concurrent: 最大并发数
+        verbose: 是否显示详细信息
+
+    Returns:
+        List[Dict]: 验证结果列表
+    """
+    if not json_files:
+        return []
+
+    # 初始化任务池
+    task_pool = BatchTaskPool(max_concurrent=max_concurrent)
+    results = []
+    pending_tasks = {}
+
+    print(f"{Fore.CYAN}🚀 启动并发验证，最大并发数: {max_concurrent}{Style.RESET_ALL}")
+
+    # 使用tqdm显示处理进度
+    with tqdm(total=len(json_files), desc=f"{Fore.GREEN}📊 验证文件{Style.RESET_ALL}", unit="files") as pbar:
+
+        # 提交所有任务
+        for json_file in json_files:
+            coro = validate_single_file_async(validator, json_file)
+            task_data = {"path": json_file}
+
+            task_id, task = await task_pool.submit_task(coro, task_data)
+            pending_tasks[task_id] = {"task": task, "data": task_data}
+
+        # 收集完成的任务
+        while pending_tasks:
+            completed_task_ids = []
+
+            for task_id, task_info in pending_tasks.items():
+                if task_info["task"].done():
+                    try:
+                        result = await task_info["task"]
+                        results.append(result)
+
+                        # 更新进度条
+                        pbar.update(1)
+
+                        # 显示处理状态
+                        filename = os.path.basename(result.get("file_path", "unknown"))
+                        if result.get("is_valid"):
+                            pbar.set_postfix_str(f"{Fore.GREEN}✓{Style.RESET_ALL} {filename}")
+                            if verbose:
+                                print(f"  验证: {filename} ... {Fore.GREEN}✓{Style.RESET_ALL}")
+                        else:
+                            pbar.set_postfix_str(f"{Fore.RED}✗{Style.RESET_ALL} {filename}")
+                            if verbose:
+                                print(f"  验证: {filename} ... {Fore.RED}✗{Style.RESET_ALL}")
+
+                    except Exception as e:
+                        # 处理任务异常
+                        error_result = {
+                            'file_path': task_info["data"]["path"],
+                            'is_valid': False,
+                            'errors': [f"任务执行错误: {str(e)}"],
+                            'warnings': [],
+                            'data': None
+                        }
+                        results.append(error_result)
+                        pbar.update(1)
+
+                        filename = os.path.basename(task_info["data"]["path"])
+                        pbar.set_postfix_str(f"{Fore.RED}✗{Style.RESET_ALL} {filename}")
+
+                    completed_task_ids.append(task_id)
+
+            # 移除已完成的任务
+            for task_id in completed_task_ids:
+                pending_tasks.pop(task_id)
+
+            # 如果还有未完成的任务，短暂等待
+            if pending_tasks:
+                await asyncio.sleep(0.1)
+
+    # 显示任务池统计
+    stats = task_pool.get_stats()
+    print(f"{Fore.BLUE}📈 处理统计: 成功率 {stats['success_rate']:.1f}% ({stats['completed']}/{stats['total_submitted']}){Style.RESET_ALL}")
+
+    return results
+
+async def main_async():
+    """异步主函数 - 实现流式进度条和并发处理"""
     parser = argparse.ArgumentParser(
         description='分析vlm_score.py生成的JSON结果文件，验证格式并统计成本',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -786,35 +1063,45 @@ def main():
             print(f"{Fore.RED}❌ 错误: 指定路径不是目录: {args.results_directory}{Style.RESET_ALL}")
             return 1
         
-        # 查找JSON文件
-        print(f"{Fore.CYAN}🔍 正在扫描目录: {args.results_directory}{Style.RESET_ALL}")
-        json_files = find_result_files(args.results_directory)
-        
-        if not json_files:
-            print(f"{Fore.YELLOW}⚠️ 在指定目录中未找到JSON文件{Style.RESET_ALL}")
-            return 0
-        
-        print(f"{Fore.GREEN}📁 找到 {len(json_files)} 个JSON文件{Style.RESET_ALL}")
-        
+        # 获取并发限制配置
+        max_concurrent = int(os.getenv('RESULT_ANALYZER_CONCURRENT_LIMIT', '200'))
+
         # 初始化分析器
         validator = JsonValidator()
         cost_analyzer = CostAnalyzer()
         report_generator = ReportGenerator(validator, cost_analyzer)
-        
-        # 验证所有文件
-        print(f"{Fore.YELLOW}🔄 开始验证文件...{Style.RESET_ALL}")
-        validation_results = []
-        
-        for json_file in json_files:
-            if args.verbose:
-                print(f"  验证: {os.path.basename(json_file)}", end=" ... ")
-            
-            result = validator.validate_single_file(json_file)
-            validation_results.append(result)
-            
-            if args.verbose:
-                status = f"{Fore.GREEN}✓{Style.RESET_ALL}" if result['is_valid'] else f"{Fore.RED}✗{Style.RESET_ALL}"
-                print(status)
+
+        # Phase 1: 流式文件发现
+        print(f"{Fore.CYAN}� 正在扫描目录: {args.results_directory}{Style.RESET_ALL}")
+        json_files = []
+        discovered_count = 0
+
+        # 使用流式发现并显示实时进度
+        with tqdm(desc=f"{Fore.BLUE}🔍 发现文件{Style.RESET_ALL}", unit="files") as discovery_pbar:
+            async for json_path in discover_image_json_pairs_streaming(args.results_directory):
+                json_files.append(json_path)
+                discovered_count += 1
+                discovery_pbar.update(1)
+                discovery_pbar.set_postfix_str(f"已发现 {discovered_count} 个文件对")
+
+                # 每发现1000个文件就让出控制权
+                if discovered_count % 1000 == 0:
+                    await asyncio.sleep(0)
+
+        if not json_files:
+            print(f"{Fore.YELLOW}⚠️ 在指定目录中未找到图片对应的JSON文件{Style.RESET_ALL}")
+            return 0
+
+        print(f"{Fore.GREEN}📁 发现 {len(json_files)} 个有效的图片-JSON文件对{Style.RESET_ALL}")
+
+        # Phase 2: 并发验证处理
+        print(f"{Fore.YELLOW}🔄 开始并发验证文件...{Style.RESET_ALL}")
+        validation_results = await process_json_files_concurrent(
+            json_files,
+            validator,
+            max_concurrent=max_concurrent,
+            verbose=args.verbose
+        )
         
         # 过滤结果 (如果指定)
         if args.filter_valid:
@@ -874,6 +1161,9 @@ def main():
             print(traceback.format_exc())
         return 1
 
+def main():
+    """同步入口点，调用异步主函数"""
+    return asyncio.run(main_async())
 
 if __name__ == "__main__":
     """程序入口点"""
@@ -883,4 +1173,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"{Fore.RED}❌ 致命错误: {str(e)}{Style.RESET_ALL}")
         print(traceback.format_exc())
-        exit(1) 
+        exit(1)

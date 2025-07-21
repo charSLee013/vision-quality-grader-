@@ -1,5 +1,4 @@
 import os
-import glob
 import json
 import re
 import argparse
@@ -20,6 +19,9 @@ init(autoreset=True)
 
 # 加载环境变量
 load_dotenv()
+
+# 导入优化的图片查找函数
+from vlm_common import find_images
 
 def validate_config():
     """验证必需的环境变量配置"""
@@ -438,13 +440,7 @@ class ImageQualityAnalyzer:
                     "traceback": traceback.format_exc()
                 }
 
-def find_images(root_dir, extensions=('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-    """递归查找所有图片文件"""
-    all_images = []
-    for ext in extensions:
-        all_images.extend(glob.glob(os.path.join(root_dir, '**', f'*{ext}'), recursive=True))
-        all_images.extend(glob.glob(os.path.join(root_dir, '**', f'*{ext.upper()}'), recursive=True))
-    return sorted(list(set(all_images)))  # 去重并排序
+
 
 async def process_single_image(analyzer, session, img_path, force_rerun, debug_mode, cost_calculator):
     """处理单个图片的异步函数（增加成本统计）"""
