@@ -19,7 +19,7 @@ from batch_task_pool import BatchTaskPool
 from batch_image_quality_analyzer import BatchImageQualityAnalyzer
 from vlm_common import (
     validate_batch_config, find_images, CostCalculator,
-    Fore, Style
+    quick_validate_image, Fore, Style
 )
 
 
@@ -158,19 +158,47 @@ async def process_images_batch(root_dir: str, force_rerun: bool = False, debug: 
         
         # 查找待处理图片
         all_images = find_images(root_dir)
+
+        # 预过滤：快速验证图片有效性，避免处理无效图片
+        print(f"Found {len(all_images)} images, validating...")
+        valid_images = []
+        invalid_count = 0
+        validation_stats = {"too_small": 0, "invalid_dimensions": 0, "error": 0, "valid": 0}
+
+        for img_path in all_images:
+            validation = quick_validate_image(img_path, max_size=2000, min_size=100)
+            if validation["valid"]:
+                valid_images.append(img_path)
+                validation_stats["valid"] += 1
+            else:
+                invalid_count += 1
+                reason = validation["reason"].split(":")[0]  # 提取主要原因
+                validation_stats[reason] = validation_stats.get(reason, 0) + 1
+                if debug:
+                    print(f"{Fore.YELLOW}跳过无效图片: {os.path.basename(img_path)} - {validation['reason']}{Style.RESET_ALL}")
+
+        print(f"Image validation completed:")
+        print(f"  Valid: {validation_stats['valid']}")
+        print(f"  Invalid: {invalid_count} (too_small: {validation_stats.get('too_small', 0)}, "
+              f"invalid_dimensions: {validation_stats.get('invalid_dimensions', 0)}, "
+              f"errors: {validation_stats.get('error', 0)})")
+
+        # 过滤已处理的图片
         tasks_to_process = [
-            img_path for img_path in all_images
+            img_path for img_path in valid_images
             if not os.path.exists(os.path.splitext(img_path)[0] + '.json') or force_rerun
         ]
-        
+
         if not tasks_to_process:
-            print("All images already processed.")
+            print("All valid images already processed.")
             return 0
 
         # 显示处理统计
         print("Processing Statistics:")
         print(f"  Directory: {root_dir}")
         print(f"  Images found: {len(all_images)}")
+        print(f"  Valid images: {len(valid_images)}")
+        print(f"  Invalid images: {invalid_count}")
         print(f"  To process: {len(tasks_to_process)}")
         print(f"  Concurrent limit: {concurrent_limit}")
         

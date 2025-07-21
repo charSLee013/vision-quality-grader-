@@ -14,6 +14,12 @@ from PIL import Image
 import io
 from typing import Optional, Dict
 import glob
+try:
+    import imagesize
+    IMAGESIZE_AVAILABLE = True
+except ImportError:
+    IMAGESIZE_AVAILABLE = False
+    print("Warning: imagesize library not available. Using fallback method for image validation.")
 
 # 初始化colorama用于彩色输出
 init(autoreset=True)
@@ -199,9 +205,89 @@ def get_image_type(image_path: str) -> str:
         return 'jpeg' # 默认
     return img_type
 
+def quick_validate_image(image_path: str, max_size: int = 2000, min_size: int = 100) -> dict:
+    """
+    快速验证图片尺寸，性能损耗极小
+
+    优先使用 imagesize 库只读取图片头部信息，避免加载完整图片到内存。
+    如果 imagesize 不可用，则回退到 PIL 方法。
+
+    Args:
+        image_path: 图片文件路径
+        max_size: 最大尺寸限制（宽或高）
+        min_size: 最小尺寸限制（宽或高）
+
+    Returns:
+        dict: 验证结果
+            - valid (bool): 是否通过验证
+            - width (int): 图片宽度
+            - height (int): 图片高度
+            - reason (str): 验证结果说明
+            - needs_resize (bool): 是否需要压缩
+    """
+    try:
+        # 优先使用 imagesize 库快速获取尺寸
+        if IMAGESIZE_AVAILABLE:
+            width, height = imagesize.get(image_path)
+        else:
+            # 回退到 PIL 方法
+            with Image.open(image_path) as img:
+                width, height = img.size
+
+        # 检查尺寸有效性
+        if width <= 0 or height <= 0:
+            return {
+                "valid": False,
+                "width": 0,
+                "height": 0,
+                "reason": "invalid_dimensions",
+                "needs_resize": False
+            }
+
+        # 检查最小尺寸限制
+        if width < min_size or height < min_size:
+            return {
+                "valid": False,
+                "width": width,
+                "height": height,
+                "reason": "too_small",
+                "needs_resize": False
+            }
+
+        # 检查最大尺寸限制
+        if width > max_size or height > max_size:
+            return {
+                "valid": True,  # 尺寸过大但可以压缩处理
+                "width": width,
+                "height": height,
+                "reason": "needs_resize",
+                "needs_resize": True
+            }
+
+        # 尺寸合适
+        return {
+            "valid": True,
+            "width": width,
+            "height": height,
+            "reason": "ok",
+            "needs_resize": False
+        }
+
+    except Exception as e:
+        return {
+            "valid": False,
+            "width": 0,
+            "height": 0,
+            "reason": f"error: {str(e)}",
+            "needs_resize": False
+        }
+
 def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[bytes]:
     """
-    如果图片尺寸超过最大值，则进行等比压缩。
+    优化版本：先快速检查尺寸，再决定是否加载图片
+
+    使用 imagesize 库进行预检查，避免不必要的图片加载，
+    大幅提升批量处理性能。
 
     Args:
         image_path: 图片文件路径。
@@ -210,7 +296,22 @@ def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[by
     Returns:
         如果进行了压缩，则返回压缩后的图片二进制数据 (bytes)；否则返回 None。
     """
+    # 第一步：快速检查尺寸，避免加载完整图片
+    validation = quick_validate_image(image_path, max_size)
+
+    if not validation["valid"]:
+        # 图片无效或过小，直接返回
+        return None
+
+    if not validation["needs_resize"]:
+        # 尺寸合适，无需处理
+        return None
+
+    # 第二步：只有确实需要压缩时才加载完整图片
     try:
+        width, height = validation["width"], validation["height"]
+        print(f"{Fore.YELLOW}图片尺寸 ({width}x{height}) 超出 {max_size}px，尝试压缩...{Style.RESET_ALL}")
+
         with Image.open(image_path) as img:
             # 检查是否包含有效的图像数据
             try:
@@ -221,28 +322,25 @@ def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[by
                 # 对于损坏的或非标准图像，直接跳过压缩
                 return None
 
-            width, height = img.size
-            if width > max_size or height > max_size:
-                print(f"{Fore.YELLOW}图片尺寸 ({width}x{height}) 超出 {max_size}px，尝试压缩...{Style.RESET_ALL}")
-                
-                # 计算等比缩放后的尺寸
-                if width > height:
-                    new_width = max_size
-                    new_height = int(max_size * height / width)
-                else:
-                    new_height = max_size
-                    new_width = int(max_size * width / height)
-                
-                # 使用高质量的LANCZOS采样进行缩放
-                resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # 将压缩后的图片保存到内存
-                byte_arr = io.BytesIO()
-                # 确定原始格式以进行保存
-                img_format = img.format if img.format in ['JPEG', 'PNG', 'WEBP'] else 'JPEG'
-                resized_img.save(byte_arr, format=img_format)
-                
-                return byte_arr.getvalue()
+            # 计算等比缩放后的尺寸
+            if width > height:
+                new_width = max_size
+                new_height = int(max_size * height / width)
+            else:
+                new_height = max_size
+                new_width = int(max_size * width / height)
+
+            # 使用高质量的LANCZOS采样进行缩放
+            resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # 将压缩后的图片保存到内存
+            byte_arr = io.BytesIO()
+            # 确定原始格式以进行保存
+            img_format = img.format if img.format in ['JPEG', 'PNG', 'WEBP'] else 'JPEG'
+            resized_img.save(byte_arr, format=img_format)
+
+            return byte_arr.getvalue()
+
     except FileNotFoundError:
         # 文件不存在，无法处理
         return None
@@ -250,8 +348,6 @@ def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[by
         # 捕获所有其他Pillow相关的异常
         print(f"{Fore.RED}处理图片时发生错误: {e}{Style.RESET_ALL}")
         return None
-        
-    return None
 
 def extract_xml_result(text: str) -> Dict:
     """从模型输出中提取XML内容（增强鲁棒性）"""

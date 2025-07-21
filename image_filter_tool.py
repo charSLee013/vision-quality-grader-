@@ -21,7 +21,7 @@ except ImportError:
     # 如果找不到BatchTaskPool，创建一个简化版本
     class BatchTaskPool:
         """简化版任务池，用于并发处理"""
-        def __init__(self, max_concurrent=200):
+        def __init__(self, max_concurrent=8192):
             self.semaphore = asyncio.Semaphore(max_concurrent)
             self.active_tasks = {}
             self.task_counter = 0
@@ -316,7 +316,6 @@ def process_image(img_path, json_path, args):
             return 'skipped', img_path
             
     except json.JSONDecodeError:
-        logging.error(f"JSON文件格式错误: {json_path}")
         return 'error', json_path
     except Exception as e:
         logging.error(f"处理 {img_path} 时发生未知错误: {e}")
@@ -382,7 +381,6 @@ async def process_image_async(img_path: str, json_path: str, args) -> Dict[str, 
             return {"status": "skipped", "path": img_path, "details": "不满足筛选条件"}
 
     except json.JSONDecodeError:
-        logging.error(f"JSON文件格式错误: {json_path}")
         return {"status": "error", "path": json_path, "details": "JSON格式错误"}
     except Exception as e:
         logging.error(f"处理 {img_path} 时发生未知错误: {e}")
@@ -446,7 +444,7 @@ def setup_parser():
     
     # 控制参数
     parser.add_argument('--logic', type=str, choices=['AND', 'OR'], default='AND', help="多个筛选条件之间的逻辑关系 (默认: AND)。")
-    parser.add_argument('--workers', type=int, default=os.cpu_count(), help='并行处理的工作线程数 (默认: 系统CPU核心数)。')
+    parser.add_argument('--workers', type=int, default=os.cpu_count(), help='并行处理的协程数量 (默认: 系统CPU核心数)。')
     parser.add_argument('--dry-run', action='store_true', help='模拟运行，只打印操作信息而不实际复制文件。')
     parser.add_argument('--flat-output', action='store_true', help='将所有文件复制到目标目录的根级别，并以SHA256重命名。')
     parser.add_argument('--log-file', type=str, default='filter_log.txt', help='指定日志文件的路径 (默认: filter_log.txt)。')
@@ -456,7 +454,7 @@ def setup_parser():
 async def process_images_concurrent(
     image_pairs: List[Tuple[str, str]],
     args,
-    max_concurrent: int = 200
+    max_concurrent: int = 8192
 ) -> Dict[str, int]:
     """
     并发处理图片文件对
@@ -478,6 +476,11 @@ async def process_images_concurrent(
     pending_tasks = {}
 
     print(f"ASYNC: {max_concurrent} coroutines")
+
+    # 初始化计数器
+    success_count = 0
+    skip_count = 0
+    error_count = 0
 
     # 使用tqdm显示处理进度
     with tqdm(total=len(image_pairs), desc="PROCESS", unit="pairs", ncols=80) as pbar:
@@ -503,16 +506,17 @@ async def process_images_concurrent(
                         # 更新进度条
                         pbar.update(1)
 
-                        # 显示处理状态
-                        filename = os.path.basename(result.get("path", "unknown"))
+                        # 更新计数器并显示聚合统计
                         status = result.get("status", "unknown")
-
                         if status == "copied":
-                            pbar.set_postfix_str(f"OK {filename}")
+                            success_count += 1
                         elif status == "skipped":
-                            pbar.set_postfix_str(f"SKIP {filename}")
+                            skip_count += 1
                         else:
-                            pbar.set_postfix_str(f"ERR {filename}")
+                            error_count += 1
+
+                        # 显示聚合统计
+                        pbar.set_postfix_str(f"成功={success_count}，跳过={skip_count}，失败={error_count}")
 
                     except Exception as e:
                         # 处理任务异常
@@ -524,8 +528,9 @@ async def process_images_concurrent(
                         results.append(error_result)
                         pbar.update(1)
 
-                        filename = os.path.basename(task_info["data"]["path"])
-                        pbar.set_postfix_str(f"{Fore.RED}✗{Style.RESET_ALL} {filename}")
+                        # 更新错误计数器并显示聚合统计
+                        error_count += 1
+                        pbar.set_postfix_str(f"成功={success_count}，跳过={skip_count}，失败={error_count}")
 
                     completed_task_ids.append(task_id)
 
@@ -558,7 +563,7 @@ async def main_async():
     args = parser.parse_args()
     
     # 获取实际的并发配置
-    max_concurrent = int(os.getenv('IMAGE_FILTER_CONCURRENT_LIMIT', '200'))
+    max_concurrent = int(os.getenv('IMAGE_FILTER_CONCURRENT_LIMIT', '8192'))
 
     # DOS风格配置显示
     print("=" * 60)
