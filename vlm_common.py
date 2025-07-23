@@ -69,6 +69,41 @@ USER_PROMPT = """你是一个专业的图片质量评估专家，具备以下能
 重要：XML部分必须是纯净格式，不要用markdown代码块包装，不要有额外的格式化符号。
 """
 
+# 室内设计分析提示词模板
+INTERIOR_DESIGN_PROMPT = """你是一个专业的视觉语言模型(VLM)，专门分析室内设计图像。请严格按以下步骤处理用户提供的图片：
+
+1. **元素识别** - 扫描整体场景：建筑风格、空间类型、主色调
+- 识别家具：类型/材质/颜色（如"green velvet sofa"）
+- 捕捉装饰品：灯具/植物/艺术品/摆件
+- 分析氛围特征：照明/质感/风格关键词
+
+2. **标签生成规则**（输出至<tags>）
+- 层级排序：
+a) 图像类型 → b) 设计风格 → c) 空间类型 → d) 背景特征 → e) 主要家具大类 → f) 具体家具细节 → g) 装饰元素 → h) 风格形容词 → i) 氛围关键词
+- 示例排序链：[photograph] > [mid-century modern] > [living room] > [green background] > [wooden furniture] > [green velvet sofa] > [glass lamp] > [retro style] > [cozy]
+
+3. **详细描述规则**（输出至<detail>）
+- 必须以"The image is"开头，采用流畅的叙述性描述
+- 描述整体场景和主要元素：
+• 空间类型和设计风格
+• 主要家具和装饰品（带材质/颜色）
+• 空间布局和物品摆放
+• 色彩搭配和氛围特征
+- 结尾总结：整体风格特征和设计亮点
+
+4. **输出格式要求**
+- 严格使用以下结构：
+<tags>按层级排序的逗号分隔标签</tags>
+<detail>方位描述文本，以风格总结结尾</detail>
+- 标签数量：20-30个
+- 描述长度：100-150单词
+
+5. **禁止行为**
+- 添加解释性文字
+- 使用markdown符号
+- 改变XML标签结构
+"""
+
 def validate_config():
     """验证在线推理的必需环境变量配置"""
     required_vars = ['VLM_ONLINE_API_ENDPOINT', 'VLM_API_TOKEN', 'VLM_ONLINE_MODEL_NAME']
@@ -348,6 +383,152 @@ def resize_image_if_needed(image_path: str, max_size: int = 2000) -> Optional[by
         # 捕获所有其他Pillow相关的异常
         print(f"{Fore.RED}处理图片时发生错误: {e}{Style.RESET_ALL}")
         return None
+
+def resize_to_1024px(image_path: str) -> Optional[bytes]:
+    """
+    将图片调整到1024px（用于4XX错误处理）
+
+    专门用于处理4XX HTTP错误时的图片尺寸调整，
+    将图片调整到1024px以确保在VLM API的最佳处理范围内。
+
+    Args:
+        image_path: 图片文件路径
+
+    Returns:
+        Optional[bytes]: 调整后的图片二进制数据，失败时返回None
+    """
+    try:
+        with Image.open(image_path) as img:
+            # 验证图片有效性
+            try:
+                img.verify()
+                img = Image.open(image_path)  # 重新打开进行操作
+            except Exception:
+                return None
+
+            width, height = img.size
+            target_size = 1024
+
+            print(f"{Fore.CYAN}4XX错误处理：将图片从 ({width}x{height}) 调整到 1024px{Style.RESET_ALL}")
+
+            # 计算新尺寸，保持宽高比
+            if width > height:
+                new_width = target_size
+                new_height = int(target_size * height / width)
+            else:
+                new_height = target_size
+                new_width = int(target_size * width / height)
+
+            # 使用高质量LANCZOS重采样
+            resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # 保存到内存
+            byte_arr = io.BytesIO()
+            img_format = img.format if img.format in ['JPEG', 'PNG', 'WEBP'] else 'JPEG'
+            resized_img.save(byte_arr, format=img_format)
+
+            return byte_arr.getvalue()
+
+    except Exception as e:
+        print(f"{Fore.RED}1024px调整失败: {e}{Style.RESET_ALL}")
+        return None
+
+def convert_score_to_range(score: float) -> int:
+    """
+    将0-10分数转换为1-9整数范围
+
+    用于将JSON文件中的score字段转换为适合标签的整数格式
+
+    Args:
+        score: 原始分数 (0.0-10.0)
+
+    Returns:
+        int: 转换后的分数 (1-9)
+    """
+    try:
+        # 确保输入在合理范围内
+        score = max(0.0, min(10.0, float(score)))
+
+        # 转换公式：将0-10映射到1-9
+        # 使用线性映射：(score / 10) * 8 + 1
+        # 这样0->1, 10->9, 5->5
+        if score == 0:
+            return 1
+        elif score == 10:
+            return 9
+        else:
+            # 线性插值映射
+            converted = round((score / 10.0) * 8 + 1)
+            return max(1, min(9, converted))
+
+    except (ValueError, TypeError):
+        # 如果转换失败，返回默认值5
+        return 5
+
+def extract_interior_design_result(text: str) -> Dict:
+    """
+    从模型输出中提取室内设计分析结果
+
+    提取<tags>和<detail>XML元素，用于室内设计图像分析
+
+    Args:
+        text: 模型的原始输出文本
+
+    Returns:
+        Dict: 包含'tags'和'detail'字段的字典，或包含'error'字段的错误信息
+    """
+    try:
+        # 提取<tags>标签内容
+        tags_pattern = r'<tags[^>]*>(.*?)</tags>'
+        tags_match = re.search(tags_pattern, text, re.DOTALL | re.IGNORECASE)
+
+        # 提取<detail>标签内容
+        detail_pattern = r'<detail[^>]*>(.*?)</detail>'
+        detail_match = re.search(detail_pattern, text, re.DOTALL | re.IGNORECASE)
+
+        result = {}
+
+        # 处理tags内容
+        if tags_match:
+            tags_content = tags_match.group(1).strip()
+            # 清理可能的markdown标记和多余空白
+            tags_content = re.sub(r'```[a-zA-Z]*\s*', '', tags_content)
+            tags_content = re.sub(r'\s*```', '', tags_content)
+            tags_content = re.sub(r'\s+', ' ', tags_content)
+            result['tags'] = tags_content
+        else:
+            result['tags'] = ''
+
+        # 处理detail内容
+        if detail_match:
+            detail_content = detail_match.group(1).strip()
+            # 清理可能的markdown标记
+            detail_content = re.sub(r'```[a-zA-Z]*\s*', '', detail_content)
+            detail_content = re.sub(r'\s*```', '', detail_content)
+            # 保持段落结构，但清理多余空白
+            detail_content = re.sub(r'\n\s*\n', '\n', detail_content)
+            detail_content = re.sub(r'[ \t]+', ' ', detail_content)
+            result['detail'] = detail_content
+        else:
+            result['detail'] = ''
+
+        # 如果两个字段都为空，返回错误
+        if not result['tags'] and not result['detail']:
+            return {
+                "error": "XML_TAGS_NOT_FOUND",
+                "message": "未找到<tags>或<detail>标签",
+                "raw_output": text[:500] + "..." if len(text) > 500 else text
+            }
+
+        return result
+
+    except Exception as e:
+        return {
+            "error": "XML_PARSING_ERROR",
+            "message": f"XML解析失败: {str(e)}",
+            "raw_output": text[:500] + "..." if len(text) > 500 else text,
+            "traceback": traceback.format_exc()
+        }
 
 def extract_xml_result(text: str) -> Dict:
     """从模型输出中提取XML内容（增强鲁棒性）"""
